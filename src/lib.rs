@@ -1,3 +1,8 @@
+#[macro_use]
+extern crate pest_derive;
+
+pub mod ast;
+
 pub fn add(left: usize, right: usize) -> usize {
   left + right
 }
@@ -8,7 +13,9 @@ mod tests {
 
   #[test]
   fn it_works() {
-    let result = add(2, 2);
-    assert_eq!(result, 4);
+    let input = include_str!("../fixtures/test.conf");
+    let result = ast::parse(input);
+    println!("result: {:?}", result);
+    assert!(result.is_ok());
   }
 }
