@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, rc::Rc};
 
-use crate::{ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString, self}, global::{Func, globals}};
+use crate::{
+  ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString},
+  global::{Func, globals},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -12,6 +15,8 @@ pub enum Error {
   ScopeNotContract(Type, Span),
   #[error("typing: func not found {0}.{1} at {2:?}")]
   FuncNotFound(String, String, Span),
+  #[error("typing: infer type failed {0:?} at {1:?}")]
+  InferTypeFailed(Func, Span),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -69,7 +74,7 @@ pub enum Type {
 #[derive(Default)]
 pub enum ExprT {
   #[default] None,
-  Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
+  Func { func: Func, abi: Option<Rc<ethabi::Function>>, this: Option<Id>, args: Vec<Id>, send: bool },
   Expr(Id),
   String(TypedString),
   Number(TypedNumber),
@@ -85,7 +90,7 @@ impl std::fmt::Debug for ExprT {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::None => write!(f, "()"),
-      Self::Func { func, this, args, send } => {
+      Self::Func { func, this, args, send, .. } => {
         match this {
           Some(this) => f.write_str(&format!("{}{}{}@{:?}{:?}", func.ns, if *send {":"} else {"."}, func.name, this, args)),
           None => f.write_str(&format!("{}{}{}{:?}", func.ns, if *send {":"} else {"."}, func.name, args)),
@@ -159,6 +164,7 @@ impl Typing {
 
   pub fn insert_expr(&mut self, expr: Expression) -> Id {
     let id = self.insert_name("", expr.span.clone());
+    trace!("insert expr: {:?} {:?}", id, expr.t);
     self.get_info(id).expr = expr;
     id
   }
@@ -201,12 +207,13 @@ pub fn parse_file(state: &mut Typing, stmts: &[Stmt]) -> Result<()> {
 }
 
 pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
+  let rhs = parse_expr(state, &stmt.rhs)?;
   let id = match &stmt.lhs {
     Some(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
     None => state.insert_name(&String::new(), stmt.span.clone())
   };
   state.get_info(id).expr_span = stmt.rhs.span.clone();
-  state.get_info(id).expr = parse_expr(state, &stmt.rhs)?;
+  state.get_info(id).expr = rhs;
   Ok(())
 }
 
@@ -230,10 +237,17 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
       let mut arg_types = Vec::new();
       for arg in args {
         arg_types.push(arg.returns.clone());
-        arg_ids.push(state.insert_expr(arg));
+        if let ExprT::Expr(id) = &arg.t {
+          arg_ids.push(*id);
+        } else {
+          arg_ids.push(state.insert_expr(arg));
+        }
       }
-      result.returns = func.infer_type(arg_types);
-      result.t = ExprT::Func { func, this, args: arg_ids, send: i.dot.is_send() };
+      match func.infer_type(&arg_types) {
+        Some(ty) => result.returns = ty,
+        None => return Err(Error::InferTypeFailed(func.clone(), i.span.clone()))
+      }
+      result.t = ExprT::Func { abi: func.select(&arg_types), func, this, args: arg_ids, send: i.dot.is_send() };
     },
     ExprKind::String(i) => {
       result.returns = Type::String(i.prefix.clone().unwrap_or_default());

@@ -13,13 +13,15 @@ pub fn add(left: usize, right: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-  use std::rc::Rc;
+  use std::{rc::Rc, collections::BTreeMap};
+
+  use crate::{global::FuncImpl, abi::contract_to_scope};
 
 use super::*;
 
   #[test]
   fn it_works() -> anyhow::Result<()> {
-    flexi_logger::Logger::try_with_env_or_str("eth_caller=debug").unwrap().start().unwrap();
+    flexi_logger::Logger::try_with_env_or_str("eth_caller=debug").unwrap().start().ok();
     let input = include_str!("../fixtures/test.conf");
     let result = match ast::parse(input) {
       Ok(result) => result,
@@ -31,12 +33,16 @@ use super::*;
         anyhow::bail!("parse failed")
       }
     };
-    result.iter().for_each(|i| info!("{:?}", i));
+    result.iter().for_each(|i| trace!("{:?}", i));
     let mut state = typing::Typing::new();
-    state.add_scope("CounterFactory", Default::default());
+
+    let contract_str = include_str!("../out/counter.sol/CounterFactory.json");
+    let contract = abi::load_abi(contract_str)?;
+    info!("{:?}", contract);
+    state.add_scope("CounterFactory", abi::contract_to_scope("CounterFactory", &contract));
     let result = typing::parse_file(&mut state, &result);
     for (id, info) in &state.infos {
-      info!("{:?}{}: {:?}", id, info.display, info);
+      debug!("{:?}{}: {:?}", id, info.display, info.expr.t);
     }
     match result {
       Ok(result) => result,
