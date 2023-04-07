@@ -3,7 +3,6 @@
 
 pub mod abi;
 pub mod ast;
-pub mod global;
 pub mod typing;
 pub mod vm;
 

@@ -88,3 +88,23 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
   let abi = ContractAbi::load(io)?;
   Ok(Scope::new(name, abi))
 }
+
+pub fn globals() -> Scope {
+  let mut abi = ContractAbi {
+    constructor: None,
+    functions: BTreeMap::new(),
+    events: Default::default(),
+    errors: Default::default(),
+    receive: Default::default(),
+    fallback: Default::default(),
+  };
+  abi.functions.insert("deploy".to_string(), vec![
+    FunctionAbi {
+      name: "deploy".to_string(),
+      inputs: vec![ethabi::Param { name: "name".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }],
+      outputs: vec![ethabi::Param { name: "".to_string(), kind: ethabi::ParamType::Address, internal_type: None }],
+      constant: None,
+      state_mutability: ethabi::StateMutability::Payable
+    }]);
+  Scope::new("@Global", abi)
+}

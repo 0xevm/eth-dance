@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString},
-  global::globals, abi::{Scope, Func},
+  abi::{Scope, Func, globals},
 };
 
 #[derive(Debug, thiserror::Error)]
