@@ -58,7 +58,7 @@ impl Error {
     if let Some(span) = self.span() {
       let line = match line_index.binary_search(&span.start) {
         Ok(i) => i,
-        Err(i) => i,
+        Err(i) => i.saturating_sub(1),
       };
       let col = span.start - line_index[line];
       s = format!("{}:{}: {}", line+1, col+1, &input[span.start..span.start+span.len])
@@ -132,7 +132,7 @@ impl std::fmt::Display for Ident {
 #[derive(Debug, Default)]
 pub struct Expr {
   pub expr: ExprKind,
-  pub ty: String,
+  pub hint: String,
   pub span: Span,
 }
 
@@ -182,7 +182,7 @@ pub enum ExprKind {
 
 #[derive(Debug, Default)]
 pub struct Stmt {
-  pub lhs: Option<Ident>,
+  pub lhs: Option<Expr>,
   pub equal_span: Option<Span>,
   pub rhs: Expr,
   pub newline_span: Option<Span>,
@@ -190,15 +190,15 @@ pub struct Stmt {
 }
 
 pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
-  let mut pairs = AstParser::parse(Rule::file, input)?;
+  let mut pairs = AstParser::parse(Rule::FILE, input)?;
   if let Some(pair) = pairs.next() {
     match pair.as_rule() {
-      Rule::file => parse_file(pair),
+      Rule::FILE => parse_file(pair),
       // Rule::COMMENT => continue,
       _ => unreachable!(),
     }
   } else {
-    Err(Error::Require(Rule::file, Span::default(), Rule::file))
+    Err(Error::Require(Rule::FILE, Span::default(), Rule::FILE))
   }
 }
 
@@ -209,11 +209,11 @@ fn parse_file(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
   for pair in pairs {
     match pair.as_rule() {
       Rule::statement => result.push(parse_stmt(pair)),
-      Rule::COMMENT => {}
+      Rule::COMMENT | Rule::EOI => {},
       _ => unreachable!(),
     }
   }
-  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::file))
+  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::FILE))
 }
 
 fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
@@ -256,13 +256,13 @@ fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
     Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i))),
     Rule::string => parse_string(pair).map(ExprKind::String),
     Rule::number => parse_number(pair).map(ExprKind::Number),
-    Rule::item => parse_item(pair).map(ExprKind::Ident),
+    Rule::ident => parse_ident(pair).map(ExprKind::Ident),
     rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
   };
   let expr = expr?;
   Ok(Expr {
     expr,
-    ty: String::new(),
+    hint: String::new(),
     span,
   })
 }
@@ -274,7 +274,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut funccall = Funccall::default();
   funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.scope = Some(parse_item(pairs.next().expect("pairs: funccall => item"))?);
+    funccall.scope = Some(parse_ident(pairs.next().expect("pairs: funccall => item"))?);
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {
@@ -287,7 +287,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
 
   let pair = pairs.next().expect("pairs: funccall => name");
   match pair.as_rule() {
-    Rule::ident => funccall.name = parse_item(pair)?,
+    Rule::ident => funccall.name = parse_ident(pair)?,
     rule => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall })
   }
 
@@ -305,7 +305,23 @@ fn parse_args(pair: Pair<Rule>) -> Result<Vec<Expr>> {
   drain_error(result).map_err(|e| Error::Errors(e, span, Rule::args))
 }
 
-fn parse_item(pair: Pair<Rule>) -> Result<Ident> {
+// item = { ident ~ (":" ~ ident)? }
+fn parse_item(pair: Pair<Rule>) -> Result<Expr> {
+  assert_eq!(pair.as_rule(), Rule::item);
+  let mut pairs = pair.into_inner();
+  let mut result = Expr::default();
+  let pair = pairs.next().expect("pairs: item => ident");
+  let ident = parse_ident(pair)?;
+  result.expr = ExprKind::Ident(ident);
+  if let Some(pair) = pairs.next() {
+    let ty_ident = parse_ident(pair)?;
+    result.hint = ty_ident.to_string();
+  }
+  Ok(result)
+}
+
+fn parse_ident(pair: Pair<Rule>) -> Result<Ident> {
+  assert_eq!(pair.as_rule(), Rule::ident);
   let mut result = Ident::default();
   result.dollar_span.start = pair.as_span().start();
   if pair.as_str().starts_with('$') {
@@ -325,7 +341,7 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
-    result.prefix = Some(parse_item(pairs.next().expect("pairs: string => ident"))?.to_string())
+    result.prefix = Some(parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string())
   }
   for pair in pairs {
     let s = pair.as_str();

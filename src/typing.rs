@@ -209,7 +209,16 @@ pub fn parse_file(state: &mut Typing, stmts: &[Stmt]) -> Result<()> {
 pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
   let id = match &stmt.lhs {
-    Some(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
+    Some(expr) => {
+      let id = match &expr.expr {
+        ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
+        _ => unreachable!("expr should must be ident"),
+      };
+      if !expr.hint.is_empty() && !expr.hint.starts_with("$") {
+        state.get_info(id).should = Some(Type::Contract(expr.hint.clone()))
+      }
+      id
+    }
     None => state.insert_name(&String::new(), stmt.span.clone())
   };
   state.get_info(id).expr_span = stmt.rhs.span.clone();
@@ -269,6 +278,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, Func)> {
       let name = expr.to_string();
       if let Some(id) = state.find_name(&name) {
         this = Some(id);
+        trace!("func scope: {} {:?}", name, state.get_info(id));
         state.get_info(id).ty().clone()
       } else {
         Type::NoneType

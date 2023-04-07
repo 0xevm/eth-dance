@@ -5,3 +5,8 @@ contract CounterFactory {
     return address(0);
   }
 }
+
+contract Counter {
+  function set_admin(address) external {
+  }
+}
