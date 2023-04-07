@@ -52,6 +52,13 @@ mod tests {
         anyhow::bail!("parse failed")
       }
     };
+
+    let mut vm = vm::VM::new();
+    let result = vm::execute(&mut vm, &state);
+    for (id, value) in &vm.values {
+      info!("vm: {:?} = {:?}", id, value);
+    }
+    result?;
     Ok(())
   }
 }

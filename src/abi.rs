@@ -11,6 +11,7 @@ use crate::typing::Type;
 pub struct Scope {
   pub name: String,
   pub abi: Option<ContractAbi>,
+  pub bytecode: Option<String>,
   pub funcs: BTreeMap<String, Vec<Func>>,
 }
 
@@ -27,7 +28,7 @@ pub struct FuncImpl {
 }
 
 impl Scope {
-  pub fn new(name: &str, abi: ContractAbi) -> Self {
+  pub fn new(name: &str, abi: ContractAbi, bytecode: Option<String>) -> Self {
     let mut funcs: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for (n, v) in &abi.functions {
       for f in v {
@@ -42,7 +43,7 @@ impl Scope {
         }))
       }
     }
-    Self { name: name.to_string(), abi: Some(abi), funcs }
+    Self { name: name.to_string(), abi: Some(abi), bytecode, funcs }
   }
 
   pub fn select(&self, name: &str, args: &[Type]) -> Option<Func> {
@@ -73,11 +74,18 @@ impl FuncImpl {
 
 pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
   let mut abi_input = String::new();
+  let mut bytecode = None;
   let compiled = serde_json::from_str::<serde_json::Value>(input)?;
   if let Some(map) = compiled.as_object() {
     if map.contains_key("abi") {
       let abi = map.get("abi").unwrap();
       abi_input = serde_json::to_string(abi)?;
+    }
+    if map.contains_key("bytecode") {
+      bytecode = map.get("bytecode").unwrap().as_str().map(|i| i.to_string());
+      if bytecode.is_none() {
+        bytecode = map.get("bytecode").unwrap().as_object().and_then(|i| i.get("object")).and_then(|i| i.as_str()).map(|i| i.to_string());
+      }
     }
   }
   let input = if abi_input.is_empty() {
@@ -86,7 +94,7 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
 
   let io = std::io::Cursor::new(input);
   let abi = ContractAbi::load(io)?;
-  Ok(Scope::new(name, abi))
+  Ok(Scope::new(name, abi, bytecode))
 }
 
 pub fn globals() -> Scope {
@@ -106,5 +114,5 @@ pub fn globals() -> Scope {
       constant: None,
       state_mutability: ethabi::StateMutability::Payable
     }]);
-  Scope::new("@Global", abi)
+  Scope::new("@Global", abi, None)
 }

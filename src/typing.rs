@@ -64,6 +64,7 @@ impl Error {
 pub enum Type {
   #[default] NoneType,
   Global,
+  ContractType(String),
   Contract(String),
   Function(String, String),
   Abi(ethabi::param_type::ParamType),
@@ -144,7 +145,11 @@ impl Typing {
     self.infos.entry(id).or_default();
     self.found.insert(contract.name.to_string(), id);
     self.get_info(id).display = contract.name.to_string();
-    self.get_info(id).should = Some(Type::Contract(contract.name.to_string()));
+    self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
+    if let Some(bytecode) = &contract.bytecode {
+      self.get_info(id).expr.t = ExprT::String(TypedString { prefix: Some("hex".to_string()), value: bytecode.to_string().into(), span: Span::default() });
+      self.get_info(id).expr.returns = Type::String("hex".to_string())
+    }
     self.contracts.insert(contract.name.to_string(), contract);
   }
 
@@ -156,6 +161,10 @@ impl Typing {
 
   pub fn get_info(&mut self, id: Id) -> &mut Info {
     self.infos.get_mut(&id).unwrap()
+  }
+
+  pub fn get_info_view(&self, id: Id) -> &Info {
+    self.infos.get(&id).unwrap()
   }
 
   pub fn find_name(&self, name: &str) -> Option<Id> {
@@ -246,16 +255,15 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
       let mut arg_types = Vec::new();
       for arg in args {
         arg_types.push(arg.returns.clone());
-        // if let ExprT::Expr(id) = &arg.t {
-        //   arg_ids.push(*id);
-        // } else {
-          arg_ids.push(state.insert_expr(arg));
-        // }
+        arg_ids.push(state.insert_expr(arg));
       }
       let func = match state.contracts.get(&scope).and_then(|i| i.select(&name, &arg_types)) {
         Some(func) => {
-          if scope == "@Global" && name == "deploy" {
-            result.returns = arg_types.get(0).cloned().unwrap_or_default();
+          if scope == "@Global" && name == "deploy" && !arg_types.is_empty() {
+            result.returns = match arg_types.get(0).as_ref().unwrap() {
+              Type::ContractType(i) => Type::Contract(i.to_string()),
+              t => unreachable!("type must be ContractType: {:?}", t),
+            }
           } else {
             result.returns = func.ty().unwrap_or_default();
           }
