@@ -15,6 +15,11 @@ impl FuncImpl {
   }
 
   pub fn infer_type(&self, args: Vec<Type>) -> Type {
+    if self.ns == "@Global" && self.name == "contract" {
+      info!("@Global.contract: {:?}", args.get(0));
+      return args.get(0).cloned().unwrap_or_default()
+    }
+    warn!("fixme: infer_type");
     Type::None
   }
 }

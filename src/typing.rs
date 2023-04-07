@@ -105,6 +105,7 @@ impl Typing {
   pub fn add_scope(&mut self, name: &str, scope: BTreeMap<String, Func>) {
     let id = self.new_id();
     self.found.insert(name.to_string(), id);
+    self.get_info(id).should = Some(Type::Contract(name.to_string()));
     self.funcs.insert(name.to_string(), scope);
   }
 
