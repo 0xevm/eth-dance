@@ -150,6 +150,32 @@ pub struct TypedNumber {
   pub span: Span,
 }
 
+impl std::fmt::Display for TypedString {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}{:?}", self.prefix.as_ref().unwrap_or(&String::new()), String::from_utf8_lossy(&self.value))
+  }
+}
+
+impl std::fmt::Display for TypedNumber {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}{}", self.value, self.suffix)
+  }
+}
+
+impl std::fmt::Display for NumberSuffix {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      NumberSuffix::None => write!(f, ""),
+      NumberSuffix::Q(b, i) => write!(f, "{}q{}", if *b {"u"} else {""}, i),
+      NumberSuffix::F(b, i) => write!(f, "{}f{}", if *b {"u"} else {""}, i),
+
+      NumberSuffix::D(true, 18) => write!(f, "eth"),
+      NumberSuffix::D(true, 9) => write!(f, "gwei"),
+      NumberSuffix::D(b, i) => write!(f, "{}d{}", if *b {"u"} else {""}, i),
+    }
+  }
+}
+
 pub type StringPrefix = String;
 
 #[derive(Debug, Clone, Default)]
@@ -350,7 +376,13 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
       Rule::escape => {
         let c = match s.chars().nth(1) {
           // predefined = { "n" | "r" | "t" | "\\" | "0" | "\"" | "'" }
-          Some(c) if ['n', 'r', 't', '\\', '0', '\"', '\''].contains(&c) => Some(c),
+          Some(c) if ['n', 'r', 't', '\\', '0', '\"', '\''].contains(&c) => Some(match c {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '0' => '\0',
+            c => c
+          }),
           Some('x') | Some('u') => u32::from_str_radix(&s[2..], 16).ok().and_then(char::from_u32),
           _ => None,
         };

@@ -1,11 +1,77 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 pub use anyhow::Result;
-use ethabi::Contract;
+pub use ethabi::Contract as ContractAbi;
+pub use ethabi::Function as FunctionAbi;
+use ethabi::{ParamType};
 
-use crate::global::{Func, FuncImpl};
+use crate::typing::Type;
 
-pub fn load_abi(input: &str) -> Result<Contract> {
+#[derive(Debug)]
+pub struct Scope {
+  pub name: String,
+  pub abi: Option<ContractAbi>,
+  pub funcs: BTreeMap<String, Vec<Func>>,
+}
+
+pub type Func = Rc<FuncImpl>;
+#[derive(Debug)]
+pub struct FuncImpl {
+  pub ns: String,
+  pub name: String,
+  pub abi: Option<FunctionAbi>,
+  pub signature: String,
+  pub selector: [u8; 4],
+  pub input_types: Vec<ParamType>,
+  pub output_types: Vec<ParamType>,
+}
+
+impl Scope {
+  pub fn new(name: &str, abi: ContractAbi) -> Self {
+    let mut funcs: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for (n, v) in &abi.functions {
+      for f in v {
+        funcs.entry(n.to_string()).or_default().push(Rc::new(FuncImpl {
+          ns: name.to_string(),
+          name: f.name.clone(),
+          abi: Some(f.clone()),
+          signature: f.signature(),
+          selector: f.short_signature(),
+          input_types: f.inputs.iter().map(|i| i.kind.clone()).collect(),
+          output_types: f.outputs.iter().map(|i| i.kind.clone()).collect(),
+        }))
+      }
+    }
+    Self { name: name.to_string(), abi: Some(abi), funcs }
+  }
+
+  pub fn select(&self, name: &str, args: &[Type]) -> Option<Func> {
+    if let Some(v) = self.funcs.get(name) {
+      for f in v {
+        if f.input_types.len() != args.len() {
+          continue;
+        }
+        return Some(f.clone())
+      }
+    }
+    None
+  }
+}
+
+impl FuncImpl {
+  pub fn ty(&self) -> Option<Type> {
+    if self.output_types.is_empty() {
+      return Some(Type::NoneType)
+    } else if self.output_types.len() == 1 {
+      return Some(Type::Abi(self.output_types.first().unwrap().clone()))
+    } else {
+      let outputs = self.output_types.iter().map(|i| i.clone()).collect::<Vec<_>>();
+      return Some(Type::Abi(ethabi::ParamType::Tuple(outputs)))
+    }
+  }
+}
+
+pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
   let mut abi_input = String::new();
   let compiled = serde_json::from_str::<serde_json::Value>(input)?;
   if let Some(map) = compiled.as_object() {
@@ -19,15 +85,6 @@ pub fn load_abi(input: &str) -> Result<Contract> {
   } else { &abi_input };
 
   let io = std::io::Cursor::new(input);
-  let contract = Contract::load(io)?;
-  Ok(contract)
-}
-
-pub fn contract_to_scope(ns: &str, contract: &Contract) -> BTreeMap<String, Func> {
-  let mut result = BTreeMap::new();
-  for (name, funcs) in &contract.functions {
-    let func = Rc::new(FuncImpl { ns: ns.to_string(), name: name.to_string(), funcs: funcs.iter().map(|i| Rc::new(i.clone())).collect() });
-    result.insert(name.to_string(), func);
-  }
-  result
+  let abi = ContractAbi::load(io)?;
+  Ok(Scope::new(name, abi))
 }

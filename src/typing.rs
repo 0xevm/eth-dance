@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString},
-  global::{Func, globals},
+  global::globals, abi::{Scope, Func},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -15,8 +15,8 @@ pub enum Error {
   ScopeNotContract(Type, Span),
   #[error("typing: func not found {0}.{1} at {2:?}")]
   FuncNotFound(String, String, Span),
-  #[error("typing: infer type failed {0:?} at {1:?}")]
-  InferTypeFailed(Func, Span),
+  #[error("typing: infer type failed {0}.{1} at {1:?}")]
+  InferTypeFailed(String, String, Span),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -71,10 +71,10 @@ pub enum Type {
   Number(NumberSuffix),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub enum ExprT {
   #[default] None,
-  Func { func: Func, abi: Option<Rc<ethabi::Function>>, this: Option<Id>, args: Vec<Id>, send: bool },
+  Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
   Expr(Id),
   String(TypedString),
   Number(TypedNumber),
@@ -86,7 +86,7 @@ pub struct Expression {
   pub t: ExprT,
   pub span: Span,
 }
-impl std::fmt::Debug for ExprT {
+impl std::fmt::Display for ExprT {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::None => write!(f, "()"),
@@ -97,8 +97,8 @@ impl std::fmt::Debug for ExprT {
         }
       }
       Self::Expr(arg0) => write!(f, "{:?}", arg0),
-      Self::String(arg0) => write!(f, "{:?}", arg0),
-      Self::Number(arg0) => write!(f, "{:?}", arg0),
+      Self::String(arg0) => write!(f, "{}", arg0),
+      Self::Number(arg0) => write!(f, "{}", arg0),
     }
   }
 }
@@ -123,29 +123,29 @@ pub struct Id(u64);
 pub struct Typing {
   pub last_id: Id,
   pub infos: BTreeMap<Id, Info>,
-  pub funcs: BTreeMap<String, BTreeMap<String, Func>>,
+  pub contracts: BTreeMap<String, Scope>,
   pub found: BTreeMap<String, Id>,
 }
 
 impl Typing {
   pub fn new() -> Self {
-    let mut funcs = BTreeMap::new();
-    funcs.insert("@Global".to_string(), globals());
+    let mut contracts = BTreeMap::new();
+    contracts.insert("@Global".to_string(), globals());
     Self {
       last_id: Id(0),
       infos: BTreeMap::new(),
-      funcs,
+      contracts,
       found: BTreeMap::new(),
     }
   }
 
-  pub fn add_scope(&mut self, name: &str, scope: BTreeMap<String, Func>) {
+  pub fn add_scope(&mut self, contract: Scope) {
     let id = self.new_id();
     self.infos.entry(id).or_default();
-    self.found.insert(name.to_string(), id);
-    self.get_info(id).display = name.to_string();
-    self.get_info(id).should = Some(Type::Contract(name.to_string()));
-    self.funcs.insert(name.to_string(), scope);
+    self.found.insert(contract.name.to_string(), id);
+    self.get_info(id).display = contract.name.to_string();
+    self.get_info(id).should = Some(Type::Contract(contract.name.to_string()));
+    self.contracts.insert(contract.name.to_string(), contract);
   }
 
   pub fn new_id(&mut self) -> Id {
@@ -240,23 +240,30 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
       }
     },
     ExprKind::Funccall(i) => {
-      let (this, func) = parse_func(state, i)?;
+      let (this, scope, name) = parse_func(state, i)?;
       let args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
       let mut arg_ids = Vec::new();
       let mut arg_types = Vec::new();
       for arg in args {
         arg_types.push(arg.returns.clone());
-        if let ExprT::Expr(id) = &arg.t {
-          arg_ids.push(*id);
-        } else {
+        // if let ExprT::Expr(id) = &arg.t {
+        //   arg_ids.push(*id);
+        // } else {
           arg_ids.push(state.insert_expr(arg));
+        // }
+      }
+      let func = match state.contracts.get(&scope).and_then(|i| i.select(&name, &arg_types)) {
+        Some(func) => {
+          if scope == "@Global" && name == "deploy" {
+            result.returns = arg_types.get(0).cloned().unwrap_or_default();
+          } else {
+            result.returns = func.ty().unwrap_or_default();
+          }
+          func
         }
-      }
-      match func.infer_type(&arg_types) {
-        Some(ty) => result.returns = ty,
-        None => return Err(Error::InferTypeFailed(func.clone(), i.span.clone()))
-      }
-      result.t = ExprT::Func { abi: func.select(&arg_types), func, this, args: arg_ids, send: i.dot.is_send() };
+        None => return Err(Error::InferTypeFailed(scope, name, i.span.clone()))
+      };
+      result.t = ExprT::Func { func, this, args: arg_ids, send: i.dot.is_send() };
     },
     ExprKind::String(i) => {
       result.returns = Type::String(i.prefix.clone().unwrap_or_default());
@@ -271,7 +278,7 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
   Ok(result)
 }
 
-fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, Func)> {
+fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, String, String)> {
   let mut this = None;
   let scope = match &i.scope {
     Some(expr) => {
@@ -291,9 +298,5 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, Func)> {
     Type::Contract(name) => name.clone(),
     _ => return Err(Error::ScopeNotContract(scope, i.span.clone())),
   };
-  let func = state.funcs.get(&scope_str).and_then(|f| f.get(&i.name.to_string())).cloned();
-  match func {
-    Some(func) => Ok((this, func)),
-    None => Err(Error::FuncNotFound(scope_str, i.name.to_string(), i.span.clone())),
-  }
+  Ok((this, scope_str, i.name.to_string()))
 }

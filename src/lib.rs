@@ -13,11 +13,9 @@ pub fn add(left: usize, right: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-  use std::{rc::Rc, collections::BTreeMap};
+  use std::rc::Rc;
 
-  use crate::{global::FuncImpl, abi::contract_to_scope};
-
-use super::*;
+  use super::*;
 
   #[test]
   fn it_works() -> anyhow::Result<()> {
@@ -36,14 +34,14 @@ use super::*;
     result.iter().for_each(|i| info!("{:?}", i));
     let mut state = typing::Typing::new();
 
-    let contract1 = abi::load_abi(include_str!("../out/counter.sol/CounterFactory.json"))?;
-    let contract2 = abi::load_abi(include_str!("../out/counter.sol/Counter.json"))?;
+    let contract1 = abi::load_abi("CounterFactory", include_str!("../out/counter.sol/CounterFactory.json"))?;
+    let contract2 = abi::load_abi("Counter", include_str!("../out/counter.sol/Counter.json"))?;
     info!("{:?}", contract1);
-    state.add_scope("CounterFactory", abi::contract_to_scope("CounterFactory", &contract1));
-    state.add_scope("Counter", abi::contract_to_scope("Counter", &contract2));
+    state.add_scope(contract1);
+    state.add_scope(contract2);
     let result = typing::parse_file(&mut state, &result);
     for (id, info) in &state.infos {
-      debug!("{:?}{}: {:?}", id, info.display, info.expr.t);
+      debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.t);
     }
     match result {
       Ok(result) => result,
