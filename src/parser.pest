@@ -20,7 +20,7 @@ byte       = { "x" ~ ASCII_HEX_DIGIT{2} }
 unicode    = { "u" ~ "{" ~ ASCII_HEX_DIGIT{1, 6} ~ "}" }
 escape     = { "\\" ~ (predefined | byte | unicode) }
 
-expr = {
+expr = _{
   funccall |
   string |
   number |

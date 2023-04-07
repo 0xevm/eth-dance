@@ -4,14 +4,14 @@ use pest::{Parser, iterators::Pair};
 pub enum Error {
   #[error("parse")]
   Parse(#[from] pest::error::Error<Rule>),
-  #[error("{1:?}: {0:?}")]
-  Errors(Vec<Error>, Rule),
-  #[error("{1:?}: require {0:?}")]
-  Require(Rule, Rule),
-  #[error("{at:?}: require {require:?} found {found:?}")]
-  Mismatch { require: Rule, found: Rule, at: Rule },
-  #[error("{at:?}: require {require:?} value error: {value:?}")]
-  Value { require: Rule, value: String, at: Rule },
+  #[error("{2:?}:{1:?}: {0:?}", )]
+  Errors(Vec<Error>, Span, Rule),
+  #[error("{2:?}:{1:?}: require {0:?}")]
+  Require(Rule, Span, Rule),
+  #[error("{at:?}:{span:?}: require {require:?} found {found:?}")]
+  Mismatch { require: Rule, found: Rule, span: Span, at: Rule },
+  #[error("{at:?}:{span:?}: require {require:?} value error: {value:?}")]
+  Value { require: Rule, value: String, span: Span, at: Rule },
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -35,7 +35,7 @@ pub fn drain_error<T>(items: Vec<Result<T>>) -> Result<Vec<T>, Vec<Error>> {
 #[grammar = "parser.pest"] // relative to src
 struct AstParser;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Span {
   pub start: usize,
   pub len: usize,
@@ -126,11 +126,12 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
       _ => unreachable!(),
     }
   } else {
-    Err(Error::Require(Rule::file, Rule::file))
+    Err(Error::Require(Rule::file, Span::default(), Rule::file))
   }
 }
 
 fn parse_file(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
+  let span = pair.as_span().into();
   let pairs = pair.into_inner();
   let mut result = Vec::new();
   for pair in pairs {
@@ -140,10 +141,11 @@ fn parse_file(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
       _ => unreachable!(),
     }
   }
-  drain_error(result).map_err(|e| Error::Errors(e, Rule::file))
+  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::file))
 }
 
 fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
+  let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = Stmt::default();
   let pair = pairs.peek();
@@ -155,12 +157,11 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
         Err(e) => errors.push(e)
       }
     }
-    Some(rule) => errors.push(Error::Mismatch { require: Rule::item, found: rule, at: Rule::statement }),
-    None => {},
+    _ => {},
   }
   let Some(mut pair) = pairs.next() else {
-    errors.push(Error::Require(Rule::expr, Rule::statement));
-    return Err(Error::Errors(errors, Rule::statement))
+    errors.push(Error::Require(Rule::expr, span.clone(), Rule::statement));
+    return Err(Error::Errors(errors, span, Rule::statement))
   };
   if pair.as_rule() == Rule::expr {
     pair = pair.into_inner().next().expect("expr should have at least one token");
@@ -172,7 +173,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
   if errors.is_empty() {
     Ok(result)
   } else {
-    Err(Error::Errors(errors, Rule::statement))
+    Err(Error::Errors(errors, span, Rule::statement))
   }
 }
 
@@ -184,7 +185,7 @@ fn parse_expr(pair: Pair<Rule>) -> Result<TypedExpr> {
     Rule::string => parse_string(pair).map(Expr::String),
     Rule::number => parse_number(pair).map(Expr::Number),
     Rule::item => parse_item(pair).map(Expr::Ident),
-    rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, at: Rule::expr }),
+    rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
   };
   let expr = expr?;
   Ok(TypedExpr {
@@ -196,6 +197,7 @@ fn parse_expr(pair: Pair<Rule>) -> Result<TypedExpr> {
 
 // funccall = { item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
+  let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut funccall = Funccall::default();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
@@ -205,27 +207,28 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   match (pair.as_rule(), pair.as_str()) {
     (Rule::dot, ".") => funccall.dot = Accessor::Dot,
     (Rule::dot, ":") => funccall.dot = Accessor::Colon,
-    (Rule::dot, s) => return Err(Error::Value { require: Rule::dot, value: s.to_string(), at: Rule::funccall }),
-    (rule, _) => return Err(Error::Mismatch { require: Rule::dot, found: rule, at: Rule::funccall }),
+    (Rule::dot, s) => return Err(Error::Value { require: Rule::dot, value: s.to_string(), span, at: Rule::funccall }),
+    (rule, _) => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall }),
   }
 
   let pair = pairs.next().expect("pairs: funccall => name");
   match pair.as_rule() {
     Rule::ident => funccall.name = parse_item(pair)?,
-    rule => return Err(Error::Mismatch { require: Rule::dot, found: rule, at: Rule::funccall })
+    rule => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall })
   }
 
   let pair = pairs.next().expect("pairs: funccall => args");
   match pair.as_rule() {
     Rule::args => funccall.args = parse_args(pair)?,
-    rule => return Err(Error::Mismatch { require: Rule::args, found: rule, at: Rule::funccall })
+    rule => return Err(Error::Mismatch { require: Rule::args, found: rule, span, at: Rule::funccall })
   }
   Ok(funccall)
 }
 
 fn parse_args(pair: Pair<Rule>) -> Result<Vec<TypedExpr>> {
+  let span = pair.as_span().into();
   let result = pair.into_inner().map(parse_expr).collect::<Vec<_>>();
-  drain_error(result).map_err(|e| Error::Errors(e, Rule::args))
+  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::args))
 }
 
 fn parse_item(pair: Pair<Rule>) -> Result<Ident> {
@@ -246,6 +249,7 @@ fn parse_item(pair: Pair<Rule>) -> Result<Ident> {
 
 // string = ${ ident? ~ "\"" ~ (raw_string | escape)* ~ "\"" }
 fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
+  let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
@@ -264,10 +268,10 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
         };
         match c {
           Some(c) => result.value.extend(c.to_string().as_bytes()),
-          None => return Err(Error::Value { require: Rule::escape, value: s.to_string(), at: Rule::string }),
+          None => return Err(Error::Value { require: Rule::escape, value: s.to_string(), span, at: Rule::string }),
         }
       }
-      rule => return Err(Error::Mismatch { require: Rule::raw_string, found: rule, at: Rule::string }),
+      rule => return Err(Error::Mismatch { require: Rule::raw_string, found: rule, span, at: Rule::string }),
     }
   }
   Ok(result)
@@ -275,19 +279,20 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
 
 // number = { (float | int) ~ number_suffix? }
 fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
+  let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = TypedNumber::default();
 
   let pair = pairs.next().expect("pairs: number => int");
   match pair.as_rule() {
     Rule::float | Rule::int => result.value = pair.as_str().to_string(),
-    rule => return Err(Error::Mismatch { require: Rule::float, found: rule, at: Rule::number })
+    rule => return Err(Error::Mismatch { require: Rule::float, found: rule, span, at: Rule::number })
   }
 
   result.suffix = if let Some(pair) = pairs.next() {
     match pair.as_rule() {
-      Rule::number_suffix => parse_number_suffix(pair.as_str())?,
-      rule => return Err(Error::Mismatch { require: Rule::number_suffix, found: rule, at: Rule::number })
+      Rule::number_suffix => parse_number_suffix(pair.as_str(), pair.as_span().into())?,
+      rule => return Err(Error::Mismatch { require: Rule::number_suffix, found: rule, span, at: Rule::number })
     }
   } else {
     NumberSuffix::None
@@ -295,20 +300,20 @@ fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
   Ok(result)
 }
 
-fn parse_number_suffix(str: &str) -> Result<NumberSuffix> {
+fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
   let is_u = str.starts_with("u");
   let str = str.strip_prefix("u").unwrap_or(str);
   let n = if str.len() > 1 {
     match usize::from_str_radix(&str[1..], 10) {
       Ok(n) => Some(n),
-      _ => return Err(Error::Value { require: Rule::int, value: str[1..].to_string(), at: Rule::number_suffix }),
+      _ => return Err(Error::Value { require: Rule::int, value: str[1..].to_string(), span, at: Rule::number_suffix }),
     }
   } else { None };
   let result = match str.chars().nth(0) {
     Some('f') => NumberSuffix::F(is_u, n.unwrap_or(256)),
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
     Some('d') => NumberSuffix::Q(is_u, n.unwrap_or(18)),
-    _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), at: Rule::number_suffix }),
+    _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), span, at: Rule::number_suffix }),
   };
   Ok(result)
 }
