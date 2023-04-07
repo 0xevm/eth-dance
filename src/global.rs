@@ -15,7 +15,7 @@ impl FuncImpl {
   }
 
   pub fn infer_type(&self, args: Vec<Type>) -> Type {
-    todo!()
+    Type::None
   }
 }
 

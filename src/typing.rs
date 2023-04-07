@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
-use crate::{ast::{Stmt, Expr, Span, StringPrefix, NumberSuffix, TypedExpr, Funccall}, global::Func};
+use crate::{ast::{Stmt, Expr, Span, StringPrefix, NumberSuffix, TypedExpr, Funccall}, global::{Func, globals}};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,6 +14,46 @@ pub enum Error {
   FuncNotFound(String, String, Span),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
+
+
+impl Error {
+  pub fn inner_errors(self) -> Vec<Self> {
+    match self {
+      Error::Errors(v) => v.into_iter().map(|i| i.inner_errors()).flatten().collect(),
+      _ => vec![self]
+    }
+  }
+  pub fn flatten(self) -> Self {
+    match self {
+      Error::Errors(v) => {
+        Error::Errors(Error::Errors(v).inner_errors())
+      }
+      _ => self
+    }
+
+  }
+  pub fn span(&self) -> Option<Span> {
+    match self {
+      Error::NameNotFound(_, span) |
+      Error::ScopeNotContract(_, span) |
+      Error::FuncNotFound(_, _, span) =>
+        Some(span.clone()),
+      _ => None
+    }
+  }
+  pub fn show_pos(&self, input: &str, line_index: Rc<Vec<usize>>) -> String {
+    let mut s = String::new();
+    if let Some(span) = self.span() {
+      let line = match line_index.binary_search(&span.start) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+      };
+      let col = span.start - line_index[line];
+      s = format!("{}:{}: {}", line+1, col+1, &input[span.start..span.start+span.len])
+    }
+    s
+  }
+}
 
 #[derive(Debug, Clone, Default)]
 pub enum Type {
@@ -51,6 +91,23 @@ pub struct Typing {
 }
 
 impl Typing {
+  pub fn new() -> Self {
+    let mut funcs = BTreeMap::new();
+    funcs.insert("@Global".to_string(), globals());
+    Self {
+      last_id: Id(0),
+      infos: BTreeMap::new(),
+      funcs,
+      found: BTreeMap::new(),
+    }
+  }
+
+  pub fn add_scope(&mut self, name: &str, scope: BTreeMap<String, Func>) {
+    let id = self.new_id();
+    self.found.insert(name.to_string(), id);
+    self.funcs.insert(name.to_string(), scope);
+  }
+
   pub fn new_id(&mut self) -> Id {
     let id = Id(self.last_id.0+1);
     self.last_id = id;
@@ -142,11 +199,11 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<Func> {
   let scope_str = match scope {
     Type::Global => "@Global".to_string(),
     Type::Contract(name) => name.clone(),
-    _ => return Err(Error::ScopeNotContract(scope, i.dot_span.clone())),
+    _ => return Err(Error::ScopeNotContract(scope, i.span.clone())),
   };
   let func = state.funcs.get(&scope_str).and_then(|f| f.get(&i.name.to_string())).cloned();
   match func {
     Some(func) => Ok(func),
-    None => Err(Error::FuncNotFound(scope_str, i.name.to_string(), i.dot_span.clone())),
+    None => Err(Error::FuncNotFound(scope_str, i.name.to_string(), i.span.clone())),
   }
 }

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use pest::{Parser, iterators::Pair};
 
 #[derive(Debug, thiserror::Error)]
@@ -14,6 +16,56 @@ pub enum Error {
   Value { require: Rule, value: String, span: Span, at: Rule },
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
+
+impl Error {
+  pub fn inner_errors(self) -> Vec<Self> {
+    match self {
+      Error::Errors(v, _, _) => v.into_iter().map(|i| i.inner_errors()).flatten().collect(),
+      _ => vec![self]
+    }
+  }
+  pub fn flatten(self) -> Self {
+    match self {
+      Error::Errors(v, s, r) => {
+        Error::Errors(Error::Errors(v, s.clone(), r).inner_errors(), s, r)
+      }
+      _ => self
+    }
+
+  }
+  pub fn span(&self) -> Option<Span> {
+    match self {
+      Error::Errors(_, span, _) |
+      Error::Require(_, span, _) |
+      Error::Mismatch { span, .. } |
+      Error::Value { span, .. } =>
+        Some(span.clone()),
+      _ => None
+    }
+  }
+  pub fn rule(&self) -> Option<Rule> {
+    match self {
+      Error::Errors(_, _, rule) |
+      Error::Require(_, _, rule) |
+      Error::Mismatch { at: rule, .. } |
+      Error::Value { at: rule, .. } =>
+        Some(rule.clone()),
+      _ => None
+    }
+  }
+  pub fn show_pos(&self, input: &str, line_index: Rc<Vec<usize>>) -> String {
+    let mut s = String::new();
+    if let Some(span) = self.span() {
+      let line = match line_index.binary_search(&span.start) {
+        Ok(i) => i,
+        Err(i) => i,
+      };
+      let col = span.start - line_index[line];
+      s = format!("{}:{}: {}", line+1, col+1, &input[span.start..span.start+span.len])
+    }
+    s
+  }
+}
 
 pub fn drain_error<T>(items: Vec<Result<T>>) -> Result<Vec<T>, Vec<Error>> {
   let mut result = Vec::new();
@@ -43,7 +95,10 @@ pub struct Span {
 
 impl From<pest::Span<'_>> for Span {
   fn from(value: pest::Span) -> Self {
-    Self { start: value.start(), len: value.end() - value.start() }
+    Self {
+      start: value.start(),
+      len: value.end() - value.start(),
+    }
   }
 }
 
@@ -105,6 +160,7 @@ pub struct Funccall {
   pub args: Vec<TypedExpr>,
   pub dot_span: Span,
   pub args_span: Span,
+  pub span: Span,
 }
 
 #[derive(Debug, Default)]
@@ -205,9 +261,10 @@ fn parse_expr(pair: Pair<Rule>) -> Result<TypedExpr> {
 
 // funccall = { item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
-  let span = pair.as_span().into();
+  let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut funccall = Funccall::default();
+  funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
     funccall.scope = Some(parse_expr(pairs.next().expect("pairs: funccall => item"))?);
   }
@@ -218,6 +275,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
     (Rule::dot, s) => return Err(Error::Value { require: Rule::dot, value: s.to_string(), span, at: Rule::funccall }),
     (rule, _) => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall }),
   }
+  funccall.dot_span = pair.as_span().into();
 
   let pair = pairs.next().expect("pairs: funccall => name");
   match pair.as_rule() {
@@ -241,12 +299,10 @@ fn parse_args(pair: Pair<Rule>) -> Result<Vec<TypedExpr>> {
 
 fn parse_item(pair: Pair<Rule>) -> Result<Ident> {
   let mut result = Ident::default();
+  result.dollar_span.start = pair.as_span().start();
   if pair.as_str().starts_with('$') {
     result.dollar = true;
-    result.dollar_span = Span {
-      start: pair.as_span().start(),
-      len: 1,
-    };
+    result.dollar_span.len = 1;
     result.name = pair.as_str()[1..].to_string()
   } else {
     result.name = pair.as_str().to_string()
