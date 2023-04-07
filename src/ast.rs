@@ -59,6 +59,12 @@ pub struct Ident {
   pub name: String,
   pub span: Span,
 }
+impl std::fmt::Display for Ident {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    if self.dollar { f.write_str("$")? }
+    f.write_str(&self.name)
+  }
+}
 
 #[derive(Debug, Default)]
 pub struct TypedExpr {
@@ -67,7 +73,7 @@ pub struct TypedExpr {
   pub span: Span,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum NumberSuffix {
   #[default] None, Q(bool, usize), F(bool, usize), D(bool, usize),
 }
@@ -81,9 +87,11 @@ pub struct TypedNumber {
   pub span: Span,
 }
 
+pub type StringPrefix = String;
+
 #[derive(Debug, Default)]
 pub struct TypedString {
-  pub prefix: Option<Ident>,
+  pub prefix: Option<StringPrefix>,
   pub value: Vec<u8>,
   // pub value_span: Span,
   pub span: Span,
@@ -91,7 +99,7 @@ pub struct TypedString {
 
 #[derive(Debug, Default)]
 pub struct Funccall {
-  pub head: Option<TypedExpr>,
+  pub scope: Option<TypedExpr>,
   pub dot: Accessor,
   pub name: Ident,
   pub args: Vec<TypedExpr>,
@@ -201,7 +209,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut pairs = pair.into_inner();
   let mut funccall = Funccall::default();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.head = Some(parse_expr(pairs.next().expect("pairs: funccall => item"))?);
+    funccall.scope = Some(parse_expr(pairs.next().expect("pairs: funccall => item"))?);
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {
@@ -253,7 +261,7 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
-    result.prefix = Some(parse_item(pairs.next().expect("pairs: string => ident"))?)
+    result.prefix = Some(parse_item(pairs.next().expect("pairs: string => ident"))?.to_string())
   }
   for pair in pairs {
     let s = pair.as_str();
