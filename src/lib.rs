@@ -1,6 +1,7 @@
 #[macro_use] extern crate log;
 #[macro_use] extern crate pest_derive;
 
+pub mod abi;
 pub mod ast;
 pub mod global;
 pub mod typing;
@@ -33,7 +34,11 @@ use super::*;
     result.iter().for_each(|i| info!("{:?}", i));
     let mut state = typing::Typing::new();
     state.add_scope("CounterFactory", Default::default());
-    match typing::parse_file(&mut state, &result) {
+    let result = typing::parse_file(&mut state, &result);
+    for (id, info) in &state.infos {
+      info!("{:?}{}: {:?}", id, info.display, info);
+    }
+    match result {
       Ok(result) => result,
       Err(e) => {
         let line_index = Rc::new(input.lines().map(|i| i.as_ptr() as usize - input.as_ptr() as usize).collect::<Vec<_>>());

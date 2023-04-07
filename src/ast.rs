@@ -102,9 +102,17 @@ impl From<pest::Span<'_>> for Span {
   }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Accessor {
   #[default] Dot, Colon,
+}
+impl Accessor {
+  pub fn is_send(self) -> bool {
+    match self {
+      Accessor::Dot => false,
+      Accessor::Colon => true,
+    }
+  }
 }
 
 #[derive(Debug, Default)]
@@ -122,8 +130,8 @@ impl std::fmt::Display for Ident {
 }
 
 #[derive(Debug, Default)]
-pub struct TypedExpr {
-  pub expr: Expr,
+pub struct Expr {
+  pub expr: ExprKind,
   pub ty: String,
   pub span: Span,
 }
@@ -133,7 +141,7 @@ pub enum NumberSuffix {
   #[default] None, Q(bool, usize), F(bool, usize), D(bool, usize),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TypedNumber {
   pub value: String,
   pub value_span: Span,
@@ -144,7 +152,7 @@ pub struct TypedNumber {
 
 pub type StringPrefix = String;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TypedString {
   pub prefix: Option<StringPrefix>,
   pub value: Vec<u8>,
@@ -154,17 +162,17 @@ pub struct TypedString {
 
 #[derive(Debug, Default)]
 pub struct Funccall {
-  pub scope: Option<TypedExpr>,
+  pub scope: Option<Ident>,
   pub dot: Accessor,
   pub name: Ident,
-  pub args: Vec<TypedExpr>,
+  pub args: Vec<Expr>,
   pub dot_span: Span,
   pub args_span: Span,
   pub span: Span,
 }
 
 #[derive(Debug, Default)]
-pub enum Expr {
+pub enum ExprKind {
   #[default] None,
   Ident(Ident),
   Funccall(Box<Funccall>),
@@ -176,7 +184,7 @@ pub enum Expr {
 pub struct Stmt {
   pub lhs: Option<Ident>,
   pub equal_span: Option<Span>,
-  pub rhs: TypedExpr,
+  pub rhs: Expr,
   pub newline_span: Option<Span>,
   pub span: Span,
 }
@@ -242,17 +250,17 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
 }
 
 // expr = { funccall | string | number | item }
-fn parse_expr(pair: Pair<Rule>) -> Result<TypedExpr> {
+fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
   let span = pair.as_span().into();
   let expr = match pair.as_rule() {
-    Rule::funccall => parse_funccall(pair).map(|i| Expr::Funccall(Box::new(i))),
-    Rule::string => parse_string(pair).map(Expr::String),
-    Rule::number => parse_number(pair).map(Expr::Number),
-    Rule::item => parse_item(pair).map(Expr::Ident),
+    Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i))),
+    Rule::string => parse_string(pair).map(ExprKind::String),
+    Rule::number => parse_number(pair).map(ExprKind::Number),
+    Rule::item => parse_item(pair).map(ExprKind::Ident),
     rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
   };
   let expr = expr?;
-  Ok(TypedExpr {
+  Ok(Expr {
     expr,
     ty: String::new(),
     span,
@@ -266,7 +274,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut funccall = Funccall::default();
   funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.scope = Some(parse_expr(pairs.next().expect("pairs: funccall => item"))?);
+    funccall.scope = Some(parse_item(pairs.next().expect("pairs: funccall => item"))?);
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {
@@ -291,7 +299,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   Ok(funccall)
 }
 
-fn parse_args(pair: Pair<Rule>) -> Result<Vec<TypedExpr>> {
+fn parse_args(pair: Pair<Rule>) -> Result<Vec<Expr>> {
   let span = pair.as_span().into();
   let result = pair.into_inner().map(parse_expr).collect::<Vec<_>>();
   drain_error(result).map_err(|e| Error::Errors(e, span, Rule::args))

@@ -20,7 +20,7 @@ impl FuncImpl {
       return args.get(0).cloned().unwrap_or_default()
     }
     warn!("fixme: infer_type");
-    Type::None
+    Type::NoneType
   }
 }
 

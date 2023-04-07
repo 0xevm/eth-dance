@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc};
 
-use crate::{ast::{Stmt, Expr, Span, StringPrefix, NumberSuffix, TypedExpr, Funccall}, global::{Func, globals}};
+use crate::{ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString, self}, global::{Func, globals}};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -57,27 +57,59 @@ impl Error {
 
 #[derive(Debug, Clone, Default)]
 pub enum Type {
-  #[default] None,
+  #[default] NoneType,
   Global,
   Contract(String),
   Function(String, String),
-  Address,
-  Uint(usize),
-  Int(usize),
-  _String(StringPrefix), // the prefix
-  _Number(NumberSuffix),
+  Abi(ethabi::param_type::ParamType),
+  String(StringPrefix), // the prefix
+  Number(NumberSuffix),
+}
+
+#[derive(Default)]
+pub enum ExprT {
+  #[default] None,
+  Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
+  Expr(Id),
+  String(TypedString),
+  Number(TypedNumber),
+}
+
+#[derive(Debug, Default)]
+pub struct Expression {
+  pub returns: Type,
+  pub t: ExprT,
+  pub span: Span,
+}
+impl std::fmt::Debug for ExprT {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::None => write!(f, "()"),
+      Self::Func { func, this, args, send } => {
+        match this {
+          Some(this) => f.write_str(&format!("{}{}{}@{:?}{:?}", func.ns, if *send {":"} else {"."}, func.name, this, args)),
+          None => f.write_str(&format!("{}{}{}{:?}", func.ns, if *send {":"} else {"."}, func.name, args)),
+        }
+      }
+      Self::Expr(arg0) => write!(f, "{:?}", arg0),
+      Self::String(arg0) => write!(f, "{:?}", arg0),
+      Self::Number(arg0) => write!(f, "{:?}", arg0),
+    }
+  }
 }
 
 #[derive(Debug, Default)]
 pub struct Info {
   pub should: Option<Type>,
-  pub got: Type,
+  pub expr: Expression,
   pub display: String,
+  pub span: Span,
+  pub expr_span: Span,
 }
 
 impl Info {
   pub fn ty(&self) -> &Type {
-    return self.should.as_ref().unwrap_or(&self.got)
+    return self.should.as_ref().unwrap_or(&self.expr.returns)
   }
 }
 
@@ -104,7 +136,9 @@ impl Typing {
 
   pub fn add_scope(&mut self, name: &str, scope: BTreeMap<String, Func>) {
     let id = self.new_id();
+    self.infos.entry(id).or_default();
     self.found.insert(name.to_string(), id);
+    self.get_info(id).display = name.to_string();
     self.get_info(id).should = Some(Type::Contract(name.to_string()));
     self.funcs.insert(name.to_string(), scope);
   }
@@ -116,18 +150,26 @@ impl Typing {
   }
 
   pub fn get_info(&mut self, id: Id) -> &mut Info {
-    self.infos.entry(id).or_default()
+    self.infos.get_mut(&id).unwrap()
   }
 
   pub fn find_name(&self, name: &str) -> Option<Id> {
     self.found.get(name).copied()
   }
 
-  pub fn insert_name(&mut self, name: &str) -> Id {
+  pub fn insert_expr(&mut self, expr: Expression) -> Id {
+    let id = self.insert_name("", expr.span.clone());
+    self.get_info(id).expr = expr;
+    id
+  }
+
+  pub fn insert_name(&mut self, name: &str, span: Span) -> Id {
     if name == "" {
       let id = self.new_id();
+      self.infos.entry(id).or_default();
       self.get_info(id).display = format!("$${}", id.0);
-      return self.new_id()
+      self.get_info(id).span = span;
+      return id
     }
     if name.starts_with("$") {
       if let Some(id) = self.found.get(name).copied() {
@@ -136,7 +178,9 @@ impl Typing {
     }
 
     let id = self.new_id();
+    self.infos.entry(id).or_default();
     self.get_info(id).display = name.to_string();
+    self.get_info(id).span = span;
     self.found.insert(name.to_string(), id);
     id
   }
@@ -157,43 +201,64 @@ pub fn parse_file(state: &mut Typing, stmts: &[Stmt]) -> Result<()> {
 }
 
 pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
-  let name = stmt.lhs.as_ref().map(ToString::to_string).unwrap_or_default();
-  let id = state.insert_name(&name);
-  state.get_info(id).got = parse_expr(state, &stmt.rhs)?;
+  let id = match &stmt.lhs {
+    Some(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
+    None => state.insert_name(&String::new(), stmt.span.clone())
+  };
+  state.get_info(id).expr_span = stmt.rhs.span.clone();
+  state.get_info(id).expr = parse_expr(state, &stmt.rhs)?;
   Ok(())
 }
 
-pub fn parse_expr(state: &mut Typing, expr: &TypedExpr) -> Result<Type> {
-  let result = match &expr.expr {
-    Expr::Ident(i) => {
+pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
+  let mut result = Expression::default();
+  match &expr.expr {
+    ExprKind::Ident(i) => {
       let dst = state.find_name(&i.to_string());
       match dst {
         Some(dst) => {
-          state.get_info(dst).ty().clone()
+          result.returns = state.get_info(dst).ty().clone();
+          result.t = ExprT::Expr(dst);
         },
         None => return Err(Error::NameNotFound(i.to_string(), i.span.clone()))
       }
     },
-    Expr::Funccall(i) => {
-      let func = parse_func(state, i)?;
+    ExprKind::Funccall(i) => {
+      let (this, func) = parse_func(state, i)?;
       let args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
-      func.infer_type(args)
+      let mut arg_ids = Vec::new();
+      let mut arg_types = Vec::new();
+      for arg in args {
+        arg_types.push(arg.returns.clone());
+        arg_ids.push(state.insert_expr(arg));
+      }
+      result.returns = func.infer_type(arg_types);
+      result.t = ExprT::Func { func, this, args: arg_ids, send: i.dot.is_send() };
     },
-    Expr::String(i) => {
-      Type::_String(i.prefix.clone().unwrap_or_default())
+    ExprKind::String(i) => {
+      result.returns = Type::String(i.prefix.clone().unwrap_or_default());
+      result.t = ExprT::String(i.clone());
     },
-    Expr::Number(i) => {
-      Type::_Number(i.suffix.clone())
+    ExprKind::Number(i) => {
+      result.returns = Type::Number(i.suffix.clone());
+      result.t = ExprT::Number(i.clone());
     },
     _ => unreachable!(),
   };
   Ok(result)
 }
 
-fn parse_func(state: &mut Typing, i: &Funccall) -> Result<Func> {
+fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, Func)> {
+  let mut this = None;
   let scope = match &i.scope {
     Some(expr) => {
-      parse_expr(state, expr)?
+      let name = expr.to_string();
+      if let Some(id) = state.find_name(&name) {
+        this = Some(id);
+        state.get_info(id).ty().clone()
+      } else {
+        Type::NoneType
+      }
     }
     None => Type::Global,
   };
@@ -204,7 +269,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<Func> {
   };
   let func = state.funcs.get(&scope_str).and_then(|f| f.get(&i.name.to_string())).cloned();
   match func {
-    Some(func) => Ok(func),
+    Some(func) => Ok((this, func)),
     None => Err(Error::FuncNotFound(scope_str, i.name.to_string(), i.span.clone())),
   }
 }
