@@ -56,10 +56,14 @@ mod tests {
     let mut vm = vm::VM::new();
     let result = vm::execute(&mut vm, &state);
     for (id, value) in &vm.builtin {
-      info!("vm: {:?} = {:?}", id, value);
+      debug!("vm: {:?} = {:?}", id, value);
     }
     for (id, value) in &vm.values {
-      info!("vm: {:?} = {:?}", id, value);
+      debug!("vm: {:?} = {:?}", id, value);
+    }
+    for (name, id) in &state.found {
+      let value = vm.values.get(id).unwrap();
+      info!("vm: {:?} = [{}] {}", name, value.abi, value.value);
     }
     result?;
     Ok(())
