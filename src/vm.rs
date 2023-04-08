@@ -315,7 +315,9 @@ async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<T
     tx = tx.from(wallet.address());
     // wallet.sign_transaction_sync(&tx)?;
   }
-  Ok(vm.provider.send_transaction(tx, None).await?.await?)
+  let pending = vm.provider.send_transaction(tx, None).await?;
+  trace!("pending: {:?}", pending);
+  Ok(pending.interval(std::time::Duration::from_secs_f64(1.0)).await?)
 }
 
 #[tokio::main]

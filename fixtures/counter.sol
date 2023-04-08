@@ -1,7 +1,9 @@
 pragma solidity ^0.8.19;
 
 contract CounterFactory {
-  function create(uint, uint) external returns(address) {
+  function create(uint, uint) external {
+  }
+  function get_counter() external returns(address) {
     return address(0);
   }
 }
