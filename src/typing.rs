@@ -131,7 +131,8 @@ pub struct Typing {
 impl Typing {
   pub fn new() -> Self {
     let mut contracts = BTreeMap::new();
-    contracts.insert("@Global".to_string(), globals());
+    contracts.insert("@Global".to_string(), globals("@Global"));
+    // contracts.insert("assert".to_string(), globals("assert"));
     Self {
       last_id: Id(0),
       infos: BTreeMap::new(),

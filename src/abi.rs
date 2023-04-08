@@ -97,7 +97,7 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
   Ok(Scope::new(name, abi, bytecode))
 }
 
-pub fn globals() -> Scope {
+pub fn globals(scope_name: &'static str) -> Scope {
   let mut abi = ContractAbi {
     constructor: None,
     functions: BTreeMap::new(),
@@ -109,10 +109,18 @@ pub fn globals() -> Scope {
   abi.functions.insert("deploy".to_string(), vec![
     FunctionAbi {
       name: "deploy".to_string(),
-      inputs: vec![ethabi::Param { name: "name".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }],
+      inputs: vec![],
       outputs: vec![ethabi::Param { name: "".to_string(), kind: ethabi::ParamType::Address, internal_type: None }],
       constant: None,
       state_mutability: ethabi::StateMutability::Payable
     }]);
-  Scope::new("@Global", abi, None)
+  abi.functions.insert("assert_eq".to_string(), vec![
+    FunctionAbi {
+      name: "assert_eq".to_string(),
+      inputs: vec![ethabi::Param { name: "a".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }, ethabi::Param { name: "b".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }],
+      outputs: vec![ethabi::Param { name: "".to_string(), kind: ethabi::ParamType::Address, internal_type: None }],
+      constant: None,
+      state_mutability: ethabi::StateMutability::Pure
+    }]);
+  Scope::new(scope_name, abi, None)
 }

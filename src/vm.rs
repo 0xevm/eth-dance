@@ -276,11 +276,14 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
           vm.set_value(*id, info, result.unwrap().into())?;
+        } else if func.ns == "@Global" && func.name == "assert_eq" && !*send {
+          if args[0].value != args[1].value {
+            anyhow::bail!("vm: assert_eq failed: {} != {}", args[0].value, args[1].value)
+          }
         } else if let Some(this) = this {
           trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
           let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
           let result = if *send {
-            warn!("fixme: send tx");
             send_tx(vm, this_addr, func.clone(), &args)?
           } else {
             call_tx(vm, this_addr, func.clone(), &args)?
@@ -368,7 +371,6 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
 fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
   let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
   info!("deploy_contract: {} {} to {}", contract_name, bytecode.len(), vm.provider.url());
-  warn!("fixme: deploy");
   let mut input_data = Vec::new();
   input_data.extend_from_slice(bytecode);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
