@@ -432,7 +432,7 @@ fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
   let result = match str.chars().nth(0) {
     Some('f') => NumberSuffix::F(is_u, n.unwrap_or(256)),
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
-    Some('d') => NumberSuffix::Q(is_u, n.unwrap_or(18)),
+    Some('d') => NumberSuffix::D(is_u, n.unwrap_or(18)),
     _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), span, at: Rule::number_suffix }),
   };
   Ok(result)

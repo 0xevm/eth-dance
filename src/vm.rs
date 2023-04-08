@@ -32,6 +32,7 @@ impl TryFrom<TypedNumber> for Value {
   type Error = &'static str;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
     let ty = Some(Type::Number(value.suffix));
+    trace!("try_from: {:?}", ty);
     match value.suffix {
       NumberSuffix::None => {
         if value.value.contains(".") {
@@ -49,6 +50,7 @@ impl TryFrom<TypedNumber> for Value {
       }
       NumberSuffix::F(b, s) => {}
       NumberSuffix::D(b, s) => {
+        trace!("10^{} = {}", s, bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32)).to_string());
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32));
       },
       _ => {}
@@ -61,6 +63,7 @@ impl TryFrom<TypedNumber> for Value {
         if base >= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(2).unwrap().pow(256)) {
           return Err("value >= 2**256")
         }
+        trace!("{}", base.to_string());
         Value {
           value: ethabi::Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
           abi: ethabi::ParamType::Uint(256), ty,
@@ -74,6 +77,7 @@ impl TryFrom<TypedNumber> for Value {
         if base < -bound {
           return Err("value < -2**255")
         }
+        trace!("{}", base.to_string());
         Value {
           value: ethabi::Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
           abi: ethabi::ParamType::Int(256), ty,
