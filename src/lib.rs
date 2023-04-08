@@ -18,7 +18,7 @@ mod tests {
 
   #[test]
   fn it_works() -> anyhow::Result<()> {
-    flexi_logger::Logger::try_with_env_or_str("eth_caller=debug").unwrap().start().ok();
+    flexi_logger::Logger::try_with_env_or_str("eth_caller=debug,ethers=debug").unwrap().start().ok();
     let input = include_str!("../fixtures/test.conf");
     let result = match ast::parse(input) {
       Ok(result) => result,
@@ -55,6 +55,9 @@ mod tests {
 
     let mut vm = vm::VM::new();
     let result = vm::execute(&mut vm, &state);
+    for (id, value) in &vm.builtin {
+      info!("vm: {:?} = {:?}", id, value);
+    }
     for (id, value) in &vm.values {
       info!("vm: {:?} = {:?}", id, value);
     }

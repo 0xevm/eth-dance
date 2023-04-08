@@ -249,27 +249,37 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
       }
     },
     ExprKind::Funccall(i) => {
-      let (this, scope, name) = parse_func(state, i)?;
-      let args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
+      let (mut this, scope, name) = parse_func(state, i)?;
+      let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
+      if scope == "@Global" && name == "deploy" {
+        if args.is_empty() {
+          return Err(Error::InferTypeFailed(scope, "deploy:this".to_string(), i.span.clone()))
+        }
+        this = match args.remove(0).t {
+          ExprT::Expr(i) => Some(i),
+          _ => todo!()
+        };
+      }
       let mut arg_ids = Vec::new();
       let mut arg_types = Vec::new();
       for arg in args {
         arg_types.push(arg.returns.clone());
         arg_ids.push(state.insert_expr(arg));
       }
-      let func = match state.contracts.get(&scope).and_then(|i| i.select(&name, &arg_types)) {
-        Some(func) => {
-          if scope == "@Global" && name == "deploy" && !arg_types.is_empty() {
-            result.returns = match arg_types.get(0).as_ref().unwrap() {
-              Type::ContractType(i) => Type::Contract(i.to_string()),
-              t => unreachable!("type must be ContractType: {:?}", t),
-            }
-          } else {
+      let func = if scope == "@Global" && name == "deploy" {
+        result.returns = match &state.get_info(this.unwrap()).should {
+          Some(Type::ContractType(i)) => Type::Contract(i.to_string()),
+          t => unreachable!("type must be ContractType: {:?}", t),
+        };
+        state.contracts.get(&scope).and_then(|i| i.funcs.get(&name)).map(|i| i[0].clone()).unwrap()
+      } else {
+        match state.contracts.get(&scope).and_then(|i| i.select(&name, &arg_types)) {
+          Some(func) => {
             result.returns = func.ty().unwrap_or_default();
+            func
           }
-          func
+          None => return Err(Error::InferTypeFailed(scope, name, i.span.clone()))
         }
-        None => return Err(Error::InferTypeFailed(scope, name, i.span.clone()))
       };
       result.t = ExprT::Func { func, this, args: arg_ids, send: i.dot.is_send() };
     },

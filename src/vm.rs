@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, str::FromStr};
 
 use bigdecimal::FromPrimitive;
 use ethabi::{Token, ParamType};
-use ethers::types::{I256, U256, H256, Address};
+use ethers::{types::{I256, U256, H256, Address, TransactionRequest, TransactionReceipt}, providers::Middleware, signers::{LocalWallet, Signer}};
 
 use crate::{
-  typing::{Typing, ExprT, Id, Type},
+  typing::{Typing, ExprT, Id, Type, Info},
   ast::{TypedNumber, NumberSuffix, TypedString},
   abi::Func
 };
@@ -50,11 +50,11 @@ impl TryFrom<TypedNumber> for Value {
     }
     let mut base = bigdecimal::BigDecimal::from_str(&value.value).map_err(|_| "convert to BigDecimal failed")?;
     match value.suffix {
-      NumberSuffix::Q(b, s) => {
+      NumberSuffix::Q(_, s) => {
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(1).unwrap() << s);
       }
-      NumberSuffix::F(b, s) => {}
-      NumberSuffix::D(b, s) => {
+      // NumberSuffix::F(b, s) => {}
+      NumberSuffix::D(_, s) => {
         trace!("10^{} = {}", s, bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32)).to_string());
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32));
       },
@@ -107,14 +107,15 @@ impl TryFrom<TypedString> for Value {
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
     let ty = Some(Type::String(value.prefix.clone().unwrap_or_default()));
     if value.prefix.is_none() {
+      let string = String::from_utf8(value.value).map_err(|_| "utf8")?;
       return Ok(Value {
-        value: ethabi::Token::Bytes(value.value),
-        abi: ethabi::ParamType::Bytes, ty,
+        value: ethabi::Token::String(string),
+        abi: ethabi::ParamType::String, ty,
       })
     }
     let prefix = value.prefix.unwrap();
     let bytes = match prefix.as_str() {
-      "hex" => {
+      "hex" | "key" => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
         let mut input = value.value.as_slice();
         if input.starts_with("0x".as_bytes()) {
@@ -125,8 +126,7 @@ impl TryFrom<TypedString> for Value {
           "decode hex"
         })?
       }
-      "key" => {
-        warn!("fixme: private key");
+      "b" => {
         value.value
       }
       _ => return Err("unknown prefix"),
@@ -141,6 +141,8 @@ impl TryFrom<TypedString> for Value {
 pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
 pub struct VM {
   pub values: BTreeMap<Id, Value>,
+  pub builtin: BTreeMap<String, Value>,
+  pub wallet: Option<LocalWallet>,
   pub provider: Provider,
 }
 
@@ -148,11 +150,34 @@ impl VM {
   pub fn new() -> Self {
     Self {
       values: Default::default(),
+      builtin: Default::default(),
+      wallet: None,
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
-  pub fn set_value(&mut self, id: Id, ty: Type, value: Value) -> Result<()> {
-    let value = try_convert(ty, value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
+  pub fn set_builtin(&mut self, name: &str, value: &Value) {
+    match name {
+      "$endpoint" => match &value.value {
+        Token::String(s) => {
+          *self.provider.url_mut() = url::Url::parse(s).unwrap();
+        }
+        _ => unreachable!()
+      }
+      "$account" => match &value.value {
+        Token::Bytes(bytes) => {
+          self.wallet = Some(LocalWallet::from_bytes(bytes).unwrap());
+        }
+        _ => unreachable!()
+      }
+      _ => warn!("unknown builtin name {}", name)
+    };
+    self.builtin.insert(name.to_string(), value.clone());
+  }
+  pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
+    let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
+    if info.display.starts_with("$") && !info.display.starts_with("$$") {
+      self.set_builtin(&info.display, &value);
+    }
     self.values.insert(id, value);
     Ok(())
   }
@@ -170,11 +195,11 @@ pub fn try_convert_u256_to_h256(i: U256) -> H256 {
   H256::from(bytes)
 }
 
-pub fn try_convert(ty: Type, mut value: Value) -> Result<Value, &'static str> {
-  if Some(&ty) == value.ty.as_ref() {
+pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, &'static str> {
+  if Some(ty) == value.ty.as_ref() {
     return Ok(value)
   }
-  let mut value = match (&ty, &value.abi) {
+  let mut value = match (ty, &value.abi) {
     (Type::ContractType(_), ethabi::ParamType::Bytes) |
     (Type::Contract(_), ethabi::ParamType::Address) |
     (Type::Number(_), ethabi::ParamType::Int(_)) |
@@ -204,7 +229,7 @@ pub fn try_convert(ty: Type, mut value: Value) -> Result<Value, &'static str> {
       value
     }
   };
-  value.ty = Some(ty);
+  value.ty = Some(ty.clone());
   Ok(value)
 }
 
@@ -220,45 +245,46 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
         } else {
           anyhow::bail!("vm: copy value from {:?} failed", i);
         };
-        vm.set_value(*id, info.ty().clone(), value)?;
+        vm.set_value(*id, info, value)?;
       }
       ExprT::Func { func, this, args, send } => {
-        if func.ns == "@Global" && func.name == "deploy" && args.len() == 1 && *send {
-          let contract_name = match typing.get_info_view(args.get(0).copied().unwrap()).ty() {
+        let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
+        if func.ns == "@Global" && func.name == "deploy" && *send {
+          let this = this.unwrap();
+          let contract_name = match typing.get_info_view(this).ty() {
             Type::ContractType(name) => name,
             t => {
               anyhow::bail!("vm: deploy args not contract {:?}", t)
             }
           };
           trace!("contract name {}", contract_name);
-          let bytecode = match vm.values.get(&args[0]) {
+          let bytecode = match vm.values.get(&this) {
             Some(Value { value: ethabi::Token::Bytes(bytes), ..}) => bytes,
             _ => anyhow::bail!("vm: contract bytecode not present"),
           };
-          let result = deploy_contract(contract_name, bytecode)?;
-          vm.set_value(*id, info.ty().clone(), result.into())?;
+          let result = deploy_contract(vm, contract_name, bytecode, &args)?;
+          vm.set_value(*id, info, result.into())?;
         } else if let Some(this) = this {
           trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
           let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
-          let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
           let result = if *send {
             warn!("fixme: send tx");
-            send_tx(this_addr, func.clone(), &args)?
+            send_tx(vm, this_addr, func.clone(), &args)?
           } else {
             unreachable!()
           };
-          vm.set_value(*id, info.ty().clone(), result)?;
+          vm.set_value(*id, info, result)?;
         } else {
           unreachable!()
         }
       }
       ExprT::Number(number) => {
         let value = Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
-        vm.set_value(*id, info.ty().clone(), value)?;
+        vm.set_value(*id, info, value)?;
       }
       ExprT::String(string) => {
         let value = Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
-        vm.set_value(*id, info.ty().clone(), value)?;
+        vm.set_value(*id, info, value)?;
       }
       // _ => {
       //   warn!("skip {:?} => {:?}", id, info.expr.returns)
@@ -268,12 +294,24 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   Ok(())
 }
 
-fn send_tx(this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
+#[tokio::main]
+async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<TransactionReceipt>> {
+  if let Some(wallet) = &vm.wallet {
+    tx = tx.from(wallet.address());
+    // wallet.sign_transaction_sync(&tx)?;
+  }
+  Ok(vm.provider.send_transaction(tx, None).await?.await?)
+}
+
+fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
   let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
+  let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
+  do_send_tx_sync(vm, tx)?;
+  // vm.provider.
   Ok(Value {
     value: Token::Uint(U256::zero()),
     abi: ethabi::ParamType::Uint(256),
@@ -281,8 +319,14 @@ fn send_tx(this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
   })
 }
 
-fn deploy_contract(contract_name: &str, bytecode: &[u8]) -> Result<Address> {
-  info!("deploy_contract: {} {}", contract_name, bytecode.len());
+fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Address> {
+  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  info!("deploy_contract: {} {} to {}", contract_name, bytecode.len(), vm.provider.url());
   warn!("fixme: deploy");
+  let mut input_data = Vec::new();
+  input_data.extend_from_slice(bytecode);
+  input_data.extend_from_slice(&ethabi::encode(&tokens));
+  let tx = TransactionRequest::new().data(input_data);//.from(vm.builtin.account);
+  do_send_tx_sync(vm, tx)?;
   Ok(Address::default())
 }
