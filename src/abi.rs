@@ -60,14 +60,14 @@ impl Scope {
 }
 
 impl FuncImpl {
-  pub fn ty(&self) -> Option<Type> {
+  pub fn returns(&self) -> Type {
     if self.output_types.is_empty() {
-      return Some(Type::NoneType)
+      Type::NoneType
     } else if self.output_types.len() == 1 {
-      return Some(Type::Abi(self.output_types.first().unwrap().clone()))
+      Type::Abi(self.output_types.first().unwrap().clone())
     } else {
       let outputs = self.output_types.iter().map(|i| i.clone()).collect::<Vec<_>>();
-      return Some(Type::Abi(ethabi::ParamType::Tuple(outputs)))
+      Type::Abi(ethabi::ParamType::Tuple(outputs))
     }
   }
 }

@@ -182,6 +182,7 @@ impl VM {
     self.builtin.insert(name.to_string(), value.clone());
   }
   pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
+    trace!("set_value: {:?} = {}", id, value.value);
     let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
       self.set_builtin(&info.display, &value);

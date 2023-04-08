@@ -61,11 +61,13 @@ mod tests {
     for (id, value) in &vm.values {
       debug!("vm: {:?} = {:?}", id, value);
     }
+    debug!("last_id: {:?}", state.last_id);
+    result?;
     for (name, id) in &state.found {
+      warn!("name: {} {:?}", name, id);
       let value = vm.values.get(id).unwrap();
       info!("vm: {:?} = [{}] {}", name, value.abi, value.value);
     }
-    result?;
     Ok(())
   }
 }

@@ -276,7 +276,7 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
       } else {
         match state.contracts.get(&scope).and_then(|i| i.select(&name, &arg_types)) {
           Some(func) => {
-            result.returns = func.ty().unwrap_or_default();
+            result.returns = func.returns();
             func
           }
           None => return Err(Error::InferTypeFailed(scope, name, i.span.clone()))
