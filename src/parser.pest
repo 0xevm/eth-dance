@@ -2,14 +2,18 @@ FILE = { SOI ~ (statement? ~ NEWLINE)* ~ EOI }
 statement = { (item ~ "=")? ~ expr }
 dot = { ":" | "." }
 
-args = { expr ~ ("," ~ expr)* }
+args = { arg ~ ("," ~ arg)* }
 funccall = { ident? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 
 ident = @{ "$"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-item = { ident ~ (":" ~ ident)? }
 int = @{ ASCII_DIGIT+ }
 float = @{ int ~ "." ~ int }
-number_suffix = @{ "u"? ~ ("f" | "q" | "d") ~ int? }
+number_suffix = @{
+  "e" ~ int ~ "u"? |
+  "f" ~ int |
+  "u"? ~ "q" ~ int? |
+  "eth" | "gwei"
+}
 number = { (float | int) ~ number_suffix? }
 
 // https://github.com/pest-parser/book/blob/master/src/examples/rust/literals.md#strings
@@ -20,12 +24,15 @@ byte       = { "x" ~ ASCII_HEX_DIGIT{2} }
 unicode    = { "u" ~ "{" ~ ASCII_HEX_DIGIT{1, 6} ~ "}" }
 escape     = { "\\" ~ (predefined | byte | unicode) }
 
-expr = _{
+item = { ident ~ (":" ~ type)? }
+arg = { expr ~ (":" ~ type)? }
+expr = {
   funccall |
   string |
   number |
   ident
 }
+type = @{ ident | string }
 
 WHITESPACE = _{ " " }
 COMMENT = { "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }

@@ -54,14 +54,14 @@ impl TryFrom<TypedNumber> for Value {
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(1).unwrap() << s);
       }
       // NumberSuffix::F(b, s) => {}
-      NumberSuffix::D(_, s) => {
+      NumberSuffix::E(_, s) => {
         trace!("10^{} = {}", s, bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32)).to_string());
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32));
       },
       _ => {}
     }
     let value = match value.suffix {
-      NumberSuffix::Q(true, _) | NumberSuffix::D(true, _) => {
+      NumberSuffix::Q(true, _) | NumberSuffix::E(true, _) => {
         if base < bigdecimal::BigDecimal::from_isize(0).unwrap() {
           return Err("value < 0")
         }
@@ -74,7 +74,7 @@ impl TryFrom<TypedNumber> for Value {
           abi: ethabi::ParamType::Uint(256), ty,
         }
       },
-      NumberSuffix::Q(false, _) | NumberSuffix::D(false, _) => {
+      NumberSuffix::Q(false, _) | NumberSuffix::E(false, _) => {
         let bound = bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(2).unwrap().pow(255));
         if base >= bound {
           return Err("value >= 2**255")

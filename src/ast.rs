@@ -132,13 +132,13 @@ impl std::fmt::Display for Ident {
 #[derive(Debug, Default)]
 pub struct Expr {
   pub expr: ExprKind,
-  pub hint: String,
+  pub hint: String, // TODO Type::from_str
   pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NumberSuffix {
-  #[default] None, Q(bool, usize), F(bool, usize), D(bool, usize),
+  #[default] None, Signed, Q(bool, usize), F(bool, usize), E(bool, usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -164,14 +164,27 @@ impl std::fmt::Display for TypedNumber {
 
 impl std::fmt::Display for NumberSuffix {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let u = if self.is_unsigned() { "u" } else { "" };
     match self {
       NumberSuffix::None => write!(f, ""),
-      NumberSuffix::Q(b, i) => write!(f, "{}q{}", if *b {"u"} else {""}, i),
-      NumberSuffix::F(b, i) => write!(f, "{}f{}", if *b {"u"} else {""}, i),
+      NumberSuffix::Signed => write!(f, "i"),
+      NumberSuffix::Q(_, i) => write!(f, "{}q{}", u, i),
+      NumberSuffix::F(_, i) => write!(f, "f{}{}", i, u),
 
-      NumberSuffix::D(true, 18) => write!(f, "eth"),
-      NumberSuffix::D(true, 9) => write!(f, "gwei"),
-      NumberSuffix::D(b, i) => write!(f, "{}d{}", if *b {"u"} else {""}, i),
+      NumberSuffix::E(true, 18) => write!(f, "eth"),
+      NumberSuffix::E(true, 9) => write!(f, "gwei"),
+      NumberSuffix::E(_, i) => write!(f, "e{}{}", i, u),
+    }
+  }
+}
+
+impl NumberSuffix {
+  pub fn is_unsigned(self) -> bool {
+    match self {
+      NumberSuffix::None => true,
+      NumberSuffix::Signed => false,
+      NumberSuffix::E(b, _) | NumberSuffix::F(b, _) | NumberSuffix::Q(b, _)
+        => b
     }
   }
 }
@@ -242,6 +255,7 @@ fn parse_file(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
   drain_error(result).map_err(|e| Error::Errors(e, span, Rule::FILE))
 }
 
+// statement = { (item ~ "=")? ~ expr }
 fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
   let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
@@ -257,13 +271,10 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
     }
     _ => {},
   }
-  let Some(mut pair) = pairs.next() else {
+  let Some(pair) = pairs.next() else {
     errors.push(Error::Require(Rule::expr, span.clone(), Rule::statement));
     return Err(Error::Errors(errors, span, Rule::statement))
   };
-  if pair.as_rule() == Rule::expr {
-    pair = pair.into_inner().next().expect("expr should have at least one token");
-  }
   match parse_expr(pair) {
     Ok(expr) => result.rhs = expr,
     Err(e) => errors.push(e),
@@ -275,22 +286,27 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
   }
 }
 
-// expr = { funccall | string | number | item }
 fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
+  assert_eq!(pair.as_rule(), Rule::expr);
+  let span = pair.as_span().into();
+  let mut pairs = pair.into_inner();
+  let expr = parse_expr_inner(pairs.next().expect("pairs: expr => inner"))?;
+  Ok(Expr {
+    expr, span, hint: String::new(),
+  })
+}
+
+// expr = { funccall | string | number | item }
+fn parse_expr_inner(pair: Pair<Rule>) -> Result<ExprKind> {
   let span = pair.as_span().into();
   let expr = match pair.as_rule() {
-    Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i))),
-    Rule::string => parse_string(pair).map(ExprKind::String),
-    Rule::number => parse_number(pair).map(ExprKind::Number),
-    Rule::ident => parse_ident(pair).map(ExprKind::Ident),
+    Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
+    Rule::string => parse_string(pair).map(ExprKind::String)?,
+    Rule::number => parse_number(pair).map(ExprKind::Number)?,
+    Rule::ident => parse_ident(pair).map(ExprKind::Ident)?,
     rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
   };
-  let expr = expr?;
-  Ok(Expr {
-    expr,
-    hint: String::new(),
-    span,
-  })
+  Ok(expr)
 }
 
 // funccall = { item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
@@ -326,24 +342,41 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   Ok(funccall)
 }
 
+// args = { arg ~ ("," ~ arg)* }
 fn parse_args(pair: Pair<Rule>) -> Result<Vec<Expr>> {
+  assert_eq!(pair.as_rule(), Rule::args);
   let span = pair.as_span().into();
-  let result = pair.into_inner().map(parse_expr).collect::<Vec<_>>();
+  let result = pair.into_inner().map(parse_arg).collect::<Vec<_>>();
   drain_error(result).map_err(|e| Error::Errors(e, span, Rule::args))
 }
 
-// item = { ident ~ (":" ~ ident)? }
+// arg = { expr ~ (":" ~ type)? }
+fn parse_arg(pair: Pair<Rule>) -> Result<Expr> {
+  assert_eq!(pair.as_rule(), Rule::arg);
+  let span = pair.as_span().into();
+  let mut pairs = pair.into_inner();
+  let mut expr = parse_expr(pairs.next().expect("pairs: arg => expr"))?;
+  if let Some(pair) = pairs.next() {
+    expr.hint = parse_type(pair)?;
+  }
+  expr.span = span;
+  assert!(pairs.next().is_none());
+  Ok(expr)
+}
+
+// item = { ident ~ (":" ~ type)? }
 fn parse_item(pair: Pair<Rule>) -> Result<Expr> {
   assert_eq!(pair.as_rule(), Rule::item);
+  let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = Expr::default();
   let pair = pairs.next().expect("pairs: item => ident");
   let ident = parse_ident(pair)?;
   result.expr = ExprKind::Ident(ident);
   if let Some(pair) = pairs.next() {
-    let ty_ident = parse_ident(pair)?;
-    result.hint = ty_ident.to_string();
+    result.hint = parse_type(pair)?;
   }
+  result.span = span;
   Ok(result)
 }
 
@@ -362,8 +395,15 @@ fn parse_ident(pair: Pair<Rule>) -> Result<Ident> {
   Ok(result)
 }
 
+fn parse_type(pair: Pair<Rule>) -> Result<String> {
+  assert_eq!(pair.as_rule(), Rule::r#type);
+  error!("parse_type: {}", pair.as_str());
+  Ok(pair.as_str().to_string())
+}
+
 // string = ${ ident? ~ "\"" ~ (raw_string | escape)* ~ "\"" }
 fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
+  assert_eq!(pair.as_rule(), Rule::string);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
@@ -400,6 +440,7 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
 
 // number = { (float | int) ~ number_suffix? }
 fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
+  assert_eq!(pair.as_rule(), Rule::number);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = TypedNumber::default();
@@ -422,8 +463,15 @@ fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
 }
 
 fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
-  let is_u = str.starts_with("u");
-  let str = str.strip_prefix("u").unwrap_or(str);
+  match str {
+    "" => return Ok(NumberSuffix::None),
+    "i" => return Ok(NumberSuffix::Signed),
+    "eth" => return Ok(NumberSuffix::E(true, 18)),
+    "gwei" => return Ok(NumberSuffix::E(true, 9)),
+    _ => {}
+  }
+  let is_u = str.starts_with("u") || str.ends_with("u");
+  let str = str.trim_matches('u');
   let n = if str.len() > 1 {
     match usize::from_str_radix(&str[1..], 10) {
       Ok(n) => Some(n),
@@ -431,9 +479,9 @@ fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
     }
   } else { None };
   let result = match str.chars().nth(0) {
-    Some('f') => NumberSuffix::F(is_u, n.unwrap_or(256)),
+    Some('f') => NumberSuffix::F(is_u, n.unwrap_or(64)),
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
-    Some('d') => NumberSuffix::D(is_u, n.unwrap_or(18)),
+    Some('e') => NumberSuffix::E(is_u, n.unwrap_or(0)),
     _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), span, at: Rule::number_suffix }),
   };
   Ok(result)

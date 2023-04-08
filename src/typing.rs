@@ -224,8 +224,13 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
         ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
         _ => unreachable!("expr should must be ident"),
       };
-      if !expr.hint.is_empty() && !expr.hint.starts_with("$") {
-        state.get_info(id).should = Some(Type::Contract(expr.hint.clone()))
+      if !expr.hint.is_empty() {
+        if expr.hint.starts_with('"') {
+          trace!("hint: {}", expr.hint);
+          state.get_info(id).should = Some(Type::Contract(expr.hint.trim_matches('"').to_string()))
+        } else {
+          warn!("fixme: built-in hint {}", expr.hint);
+        }
       }
       id
     }
