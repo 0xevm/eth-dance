@@ -60,7 +60,7 @@ impl Error {
   }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum Type {
   #[default] NoneType,
   Global,

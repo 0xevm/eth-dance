@@ -7,9 +7,11 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.70"
+bigdecimal = "0.3.0"
 ethabi = "18.0.0"
-ethers = "2.0.2"
+ethers = "2.0.0"
 flexi_logger = "0.25.3"
+hex = "0.4.3"
 log = "0.4.17"
 pest = "2.5.7"
 pest_derive = "2.5.7"

@@ -136,7 +136,7 @@ pub struct Expr {
   pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NumberSuffix {
   #[default] None, Q(bool, usize), F(bool, usize), D(bool, usize),
 }
