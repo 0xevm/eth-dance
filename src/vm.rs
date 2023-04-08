@@ -1,9 +1,14 @@
 use std::{collections::BTreeMap, str::FromStr};
 
 use bigdecimal::FromPrimitive;
-use ethers::types::{I256, U256, H160, Address};
+use ethabi::{Token, ParamType};
+use ethers::types::{I256, U256, H256, Address};
 
-use crate::{typing::{Typing, ExprT, Id, Type}, ast::{TypedNumber, NumberSuffix, TypedString}};
+use crate::{
+  typing::{Typing, ExprT, Id, Type},
+  ast::{TypedNumber, NumberSuffix, TypedString},
+  abi::Func
+};
 
 // pub struct Error {
 
@@ -133,14 +138,17 @@ impl TryFrom<TypedString> for Value {
   }
 }
 
+pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
 pub struct VM {
   pub values: BTreeMap<Id, Value>,
+  pub provider: Provider,
 }
 
 impl VM {
   pub fn new() -> Self {
     Self {
       values: Default::default(),
+      provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
   pub fn set_value(&mut self, id: Id, ty: Type, value: Value) -> Result<()> {
@@ -148,27 +156,55 @@ impl VM {
     self.values.insert(id, value);
     Ok(())
   }
+  pub fn get_address(&self, id: Id) -> Option<Address> {
+    match self.values.get(&id)?.value {
+      Token::Address(addr) => Some(addr),
+      _ => None,
+    }
+  }
+}
+
+pub fn try_convert_u256_to_h256(i: U256) -> H256 {
+  let mut bytes = [0u8; 32];
+  i.to_big_endian(&mut bytes);
+  H256::from(bytes)
 }
 
 pub fn try_convert(ty: Type, mut value: Value) -> Result<Value, &'static str> {
   if Some(&ty) == value.ty.as_ref() {
     return Ok(value)
   }
-  let value = match (&ty, &value.abi) {
+  let mut value = match (&ty, &value.abi) {
     (Type::ContractType(_), ethabi::ParamType::Bytes) |
     (Type::Contract(_), ethabi::ParamType::Address) |
     (Type::Number(_), ethabi::ParamType::Int(_)) |
     (Type::Number(_), ethabi::ParamType::Uint(_)) |
     (Type::String(_), ethabi::ParamType::Bytes)
       => {
-        value.ty = Some(ty);
         value
       },
+    (Type::Contract(_), ethabi::ParamType::Uint(_))
+      => {
+        let new_value: Address = match value.value {
+          Token::Uint(i) | Token::Int(i) =>
+            try_convert_u256_to_h256(i).into(),
+          _ => unreachable!(),
+        };
+        value.value = Token::Address(new_value);
+        value.abi = ParamType::Address;
+        value
+      }
+    (Type::NoneType, _) => {
+      value.value = Token::FixedBytes(vec![]);
+      value.abi = ParamType::FixedBytes(0);
+      value
+    }
     _ => {
-      warn!("fixme: convert to ty: {:?} => {:?}", value.ty, ty);
+      warn!("fixme: convert to ty: {:?} => {:?}", value.abi, ty);
       value
     }
   };
+  value.ty = Some(ty);
   Ok(value)
 }
 
@@ -187,7 +223,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
         vm.set_value(*id, info.ty().clone(), value)?;
       }
       ExprT::Func { func, this, args, send } => {
-        if func.ns == "@Global" && func.name == "deploy" && args.len() == 1 {
+        if func.ns == "@Global" && func.name == "deploy" && args.len() == 1 && *send {
           let contract_name = match typing.get_info_view(args.get(0).copied().unwrap()).ty() {
             Type::ContractType(name) => name,
             t => {
@@ -201,8 +237,19 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           let result = deploy_contract(contract_name, bytecode)?;
           vm.set_value(*id, info.ty().clone(), result.into())?;
+        } else if let Some(this) = this {
+          trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
+          let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
+          let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
+          let result = if *send {
+            warn!("fixme: send tx");
+            send_tx(this_addr, func.clone(), &args)?
+          } else {
+            unreachable!()
+          };
+          vm.set_value(*id, info.ty().clone(), result)?;
         } else {
-          warn!("fixme: send tx");
+          unreachable!()
         }
       }
       ExprT::Number(number) => {
@@ -219,6 +266,19 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
     }
   }
   Ok(())
+}
+
+fn send_tx(this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
+  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  let mut input_data = Vec::new();
+  input_data.extend_from_slice(&func.selector);
+  input_data.extend_from_slice(&ethabi::encode(&tokens));
+  debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
+  Ok(Value {
+    value: Token::Uint(U256::zero()),
+    abi: ethabi::ParamType::Uint(256),
+    ty: None,
+  })
 }
 
 fn deploy_contract(contract_name: &str, bytecode: &[u8]) -> Result<Address> {
