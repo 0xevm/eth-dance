@@ -117,14 +117,14 @@ impl TryFrom<TypedString> for Value {
     let bytes = match prefix.as_str() {
       "hex" | "key" => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
-        let mut input = value.value.as_slice();
-        if input.starts_with("0x".as_bytes()) {
-          input = &input[2..];
-        }
-        hex::decode(input).map_err(|e| {
-          error!("FromHexError: {:?}", e);
-          "decode hex"
-        })?
+        try_convert_hex_to_bytes(value.value.as_slice())?
+      }
+      "address" => {
+        let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
+        return Ok(Value {
+          value: Token::Address(Address::from_slice(&addr)),
+          abi: ParamType::Address, ty,
+        })
       }
       "b" => {
         value.value
@@ -187,6 +187,18 @@ impl VM {
       _ => None,
     }
   }
+}
+
+pub fn try_convert_hex_to_bytes(mut input: &[u8]) -> Result<Vec<u8>, &'static str> {
+  // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
+  if input.starts_with("0x".as_bytes()) {
+    input = &input[2..];
+  }
+  let result = hex::decode(input).map_err(|e| {
+    error!("FromHexError: {:?}", e);
+    "decode hex"
+  })?;
+  Ok(result)
 }
 
 pub fn try_convert_u256_to_h256(i: U256) -> H256 {
@@ -263,7 +275,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
             _ => anyhow::bail!("vm: contract bytecode not present"),
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
-          vm.set_value(*id, info, result.into())?;
+          vm.set_value(*id, info, result.unwrap().into())?;
         } else if let Some(this) = this {
           trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
           let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
@@ -271,7 +283,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
             warn!("fixme: send tx");
             send_tx(vm, this_addr, func.clone(), &args)?
           } else {
-            unreachable!()
+            call_tx(vm, this_addr, func.clone(), &args)?
           };
           vm.set_value(*id, info, result)?;
         } else {
@@ -303,6 +315,15 @@ async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<T
   Ok(vm.provider.send_transaction(tx, None).await?.await?)
 }
 
+#[tokio::main]
+async fn do_call_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<ethabi::Bytes> {
+  if let Some(wallet) = &vm.wallet {
+    tx = tx.from(wallet.address());
+    // wallet.sign_transaction_sync(&tx)?;
+  }
+  Ok(vm.provider.call(&tx.into(), None).await?.to_vec())
+}
+
 fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
   let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
@@ -311,7 +332,6 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   do_send_tx_sync(vm, tx)?;
-  // vm.provider.
   Ok(Value {
     value: Token::Uint(U256::zero()),
     abi: ethabi::ParamType::Uint(256),
@@ -319,7 +339,33 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   })
 }
 
-fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Address> {
+fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
+  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  let mut input_data = Vec::new();
+  input_data.extend_from_slice(&func.selector);
+  input_data.extend_from_slice(&ethabi::encode(&tokens));
+  debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
+  let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
+  let bytes = do_call_tx_sync(vm, tx)?;
+  let mut out = ethabi::decode(&func.output_types, &bytes)?;
+  let result = if out.len() == 1 {
+    Value {
+      value: out.remove(0),
+      abi: func.output_types[0].clone(),
+      ty: None,
+    }
+  } else {
+    Value {
+      value: Token::Tuple(out),
+      abi: ParamType::Tuple(func.output_types.clone()),
+      ty: None,
+    }
+  };
+  // vm.provider.
+  Ok(result)
+}
+
+fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
   let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
   info!("deploy_contract: {} {} to {}", contract_name, bytecode.len(), vm.provider.url());
   warn!("fixme: deploy");
@@ -327,6 +373,7 @@ fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value
   input_data.extend_from_slice(bytecode);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
   let tx = TransactionRequest::new().data(input_data);//.from(vm.builtin.account);
-  do_send_tx_sync(vm, tx)?;
-  Ok(Address::default())
+  let receipt = do_send_tx_sync(vm, tx)?;
+  let address = receipt.and_then(|i| i.contract_address);
+  Ok(address)
 }

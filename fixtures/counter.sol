@@ -7,6 +7,10 @@ contract CounterFactory {
 }
 
 contract Counter {
+  uint256 public sum = 0;
   function set_admin(address) external {
+  }
+  function add(uint i) external {
+    sum += i;
   }
 }

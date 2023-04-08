@@ -317,10 +317,11 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
     rule => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall })
   }
 
-  let pair = pairs.next().expect("pairs: funccall => args");
-  match pair.as_rule() {
-    Rule::args => funccall.args = parse_args(pair)?,
-    rule => return Err(Error::Mismatch { require: Rule::args, found: rule, span, at: Rule::funccall })
+  if let Some(pair) = pairs.next() {
+    match pair.as_rule() {
+      Rule::args => funccall.args = parse_args(pair)?,
+      rule => return Err(Error::Mismatch { require: Rule::args, found: rule, span, at: Rule::funccall })
+    }
   }
   Ok(funccall)
 }
