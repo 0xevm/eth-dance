@@ -143,6 +143,7 @@ pub struct VM {
   pub values: BTreeMap<Id, Value>,
   pub builtin: BTreeMap<String, Value>,
   pub wallet: Option<LocalWallet>,
+  pub confirm_interval: Option<f64>,
   pub provider: Provider,
 }
 
@@ -152,6 +153,7 @@ impl VM {
       values: Default::default(),
       builtin: Default::default(),
       wallet: None,
+      confirm_interval: None,
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
@@ -166,6 +168,12 @@ impl VM {
       "$account" => match &value.value {
         Token::Bytes(bytes) => {
           self.wallet = Some(LocalWallet::from_bytes(bytes).unwrap());
+        }
+        _ => unreachable!()
+      }
+      "$confirm_interval" => match &value.value {
+        Token::Uint(i) => {
+          self.confirm_interval = Some(i.as_u64() as _)
         }
         _ => unreachable!()
       }
@@ -317,7 +325,12 @@ async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<T
   }
   let pending = vm.provider.send_transaction(tx, None).await?;
   trace!("pending: {:?}", pending);
-  Ok(pending.interval(std::time::Duration::from_secs_f64(1.0)).await?)
+  let pending = if let Some(i) = vm.confirm_interval {
+    pending.interval(std::time::Duration::from_secs_f64(i))
+  } else {
+    pending
+  };
+  Ok(pending.await?)
 }
 
 #[tokio::main]
