@@ -12,7 +12,7 @@ pub enum Error {
   #[error("typing: name not found {0:?} at {1:?}")]
   NameNotFound(String, Span),
   #[error("typing: scope not contract {0:?} at {1:?}")]
-  ScopeNotContract(Type, Span),
+  ScopeNotContract(Option<Type>, Span),
   #[error("typing: func not found {0}.{1} at {2:?}")]
   FuncNotFound(String, String, Span),
   #[error("typing: infer type failed {0}.{1} at {1:?}")]
@@ -243,6 +243,7 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
 }
 
 pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
+  let span = expr.span.clone();
   let mut result = Expression::default();
   match &expr.inner {
     ExprKind::Ident(i) => {
@@ -261,7 +262,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
         if func.ns == "@Global" && func.name == "deploy" {
           result.returns = match &state.get_info(this.unwrap()).should {
             Some(Type::ContractType(i)) => Type::Contract(i.to_string()),
-            t => unreachable!("type must be ContractType: {:?}", t),
+            t => return Err(Error::ScopeNotContract(t.clone(), span.clone())),
           };
         } else {
           result.returns = func.returns();
@@ -281,6 +282,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     },
     _ => unreachable!(),
   };
+  result.span = span;
   Ok(result)
 }
 
@@ -303,7 +305,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let scope_str = match scope_ty {
     Type::Global(name) => name.to_string(),
     Type::Contract(name) => name.clone(),
-    _ => return Err(Error::ScopeNotContract(scope_ty, i.span.clone())),
+    _ => return Err(Error::ScopeNotContract(Some(scope_ty), i.span.clone())),
   };
 
   let name = i.name.to_string();

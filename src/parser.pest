@@ -10,7 +10,7 @@ int = @{ ASCII_DIGIT+ }
 float = @{ int ~ "." ~ int }
 number_suffix = @{
   "e" ~ int ~ "u"? |
-  "f" ~ int |
+  "f" ~ int? |
   "u"? ~ "q" ~ int? |
   "eth" | "gwei"
 }

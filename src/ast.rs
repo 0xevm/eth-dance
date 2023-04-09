@@ -452,6 +452,7 @@ fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
   }
 
   result.suffix = if let Some(pair) = pairs.next() {
+    assert_eq!(pair.as_rule(), Rule::number_suffix);
     match pair.as_rule() {
       Rule::number_suffix => parse_number_suffix(pair.as_str(), pair.as_span().into())?,
       rule => return Err(Error::Mismatch { require: Rule::number_suffix, found: rule, span, at: Rule::number })
