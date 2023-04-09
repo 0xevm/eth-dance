@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc, path::{Path, PathBuf}};
 
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
@@ -19,6 +19,8 @@ pub enum Error {
   InferTypeFailed(String, String, Span),
   #[error("typing: io {0:?} path={1} at {2:?}")]
   Io(#[source] std::io::Error, String, Span),
+  #[error("typing: path {0:?} path={1} at {2:?}")]
+  Path(#[source] std::path::StripPrefixError, String, Span),
   #[error("typing: abi {0:?} path={1} at {2:?}")]
   Abi(#[source] anyhow::Error, String, Span),
 }
@@ -126,6 +128,8 @@ impl Info {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Id(u64);
 pub struct Typing {
+  pub current_file: PathBuf,
+  pub working_dir: PathBuf,
   pub last_id: Id,
   pub infos: BTreeMap<Id, Info>,
   pub contracts: BTreeMap<String, Scope>,
@@ -133,12 +137,14 @@ pub struct Typing {
 }
 
 impl Typing {
-  pub fn new() -> Self {
+  pub fn new(current_file: PathBuf, working_dir: PathBuf) -> Self {
     let mut contracts = BTreeMap::new();
     for scope in globals() {
       contracts.insert(scope.name.to_string(), scope);
     }
     Self {
+      current_file,
+      working_dir,
       last_id: Id(0),
       infos: BTreeMap::new(),
       contracts,
@@ -231,21 +237,20 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
         _ => unreachable!("expr should must be ident"),
       };
       if !expr.hint.is_empty() {
-        if expr.hint.starts_with('@') {
-          let hint = expr.hint.trim_start_matches('@');
-          let contract_id = state.find_name(hint);
-          let contract = contract_id.map(|id| state.get_info(id).ty().clone());
-          trace!("hint: {} => {:?}", expr.hint, contract);
-          match contract {
-            Some(Type::ContractType(s)) =>
-              state.get_info(id).should = Some(Type::Contract(s)),
-            _ => {
-              warn!("fixme: contract not found");
-            }
+        let hint = if expr.hint.starts_with('@') {
+          expr.hint.trim_start_matches('@')
+        } else { &expr.hint };
+        let contract_id = state.find_name(hint);
+        let contract = contract_id.map(|id| state.get_info(id).ty().clone());
+        trace!("hint: {} => {:?}", expr.hint, contract);
+        match contract {
+          Some(Type::ContractType(s)) =>
+            state.get_info(id).should = Some(Type::Contract(s)),
+          _ => {
+            warn!("fixme: contract not found");
           }
-        } else {
-          warn!("fixme: built-in hint {}", expr.hint);
         }
+        warn!("fixme: built-in hint {}", expr.hint);
       }
       id
     }
@@ -288,12 +293,13 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     },
     ExprKind::String(i) if i.prefix == "contract" => {
       let path = String::from_utf8(i.value.clone()).unwrap();
-      let resolved_path = if let Some(path) = path.strip_prefix("./") {
+      let real_path = if path.starts_with(".") {
         warn!("fixme: resolve path related to work");
-        format!("@/fixtures/{}", path)
-      } else { path.clone() };
-      assert!(resolved_path.starts_with("@/")); // TODO_assert
-      let real_path = path.replace("@/", "./");
+        Path::new(&state.current_file).parent().unwrap().join(&path).canonicalize()
+      } else {
+        Path::new(&state.working_dir).join(&path.strip_prefix("@/").unwrap()).canonicalize()
+      }.map_err(|e| Error::Io(e, path.clone(), span.clone()))?;
+      let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).map_err(|e| Error::Path(e, path.clone(), span.clone()))?.to_string_lossy());
       let content = std::fs::read_to_string(real_path).map_err(|e| Error::Io(e, resolved_path.clone(), span.clone()))?;
       let scope = load_abi(&resolved_path, &content).map_err(|e| Error::Abi(e, resolved_path.clone(), span.clone()))?;
       let id = state.add_scope(scope);

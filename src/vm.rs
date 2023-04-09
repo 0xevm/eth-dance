@@ -37,7 +37,7 @@ impl TryFrom<TypedNumber> for Value {
   type Error = &'static str;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
     let ty = Some(Type::Number(value.suffix));
-    trace!("try_from: {:?}", ty);
+    trace!("try_from(Value<=TypedNumber): {:?}", ty);
     match value.suffix {
       NumberSuffix::None => {
         if value.value.contains(".") {
@@ -55,7 +55,6 @@ impl TryFrom<TypedNumber> for Value {
       }
       // NumberSuffix::F(b, s) => {}
       NumberSuffix::E(_, s) => {
-        trace!("10^{} = {}", s, bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32)).to_string());
         base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32));
       },
       _ => {}
@@ -68,7 +67,7 @@ impl TryFrom<TypedNumber> for Value {
         if base >= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(2).unwrap().pow(256)) {
           return Err("value >= 2**256")
         }
-        trace!("{}", base.to_string());
+        trace!("try_from(Value<=TypedNumber): base(u) = {}", base.to_string());
         Value {
           token: ethabi::Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
           abi: ethabi::ParamType::Uint(256), ty,
@@ -82,7 +81,7 @@ impl TryFrom<TypedNumber> for Value {
         if base < -bound {
           return Err("value < -2**255")
         }
-        trace!("{}", base.to_string());
+        trace!("try_from(Value<=TypedNumber): base(i) = {}", base.to_string());
         Value {
           token: ethabi::Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
           abi: ethabi::ParamType::Int(256), ty,
@@ -298,7 +297,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
           vm.set_value(*id, info, result.unwrap().into())?;
-        } else if func.ns.starts_with("@") {
+        } else if !func.ns.starts_with("@/") {
           let result = call_global(vm, func.clone(), &args)?;
           vm.set_value(*id, info, result)?;
 

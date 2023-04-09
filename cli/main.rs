@@ -5,7 +5,6 @@ use std::{rc::Rc, path::Path};
 use anyhow::Result;
 use clap::Parser;
 use eth_dance::{
-  abi::load_abi,
   ast,
   typing::{self, Typing},
   vm::{self, VM}
@@ -15,10 +14,12 @@ use eth_dance::{
 struct Opts {
   #[arg(short, long, action = clap::ArgAction::Count)]
   verbose: u8,
-  path: String,
+  #[arg(short, long)]
+  workdir: Option<String>,
+  filename: String,
 }
 
-fn run<P: AsRef<Path>>(path: P) -> Result<()> {
+fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
   let input = std::fs::read_to_string(path.as_ref())?;
   let result = match ast::parse(&input) {
     Ok(result) => result,
@@ -31,7 +32,7 @@ fn run<P: AsRef<Path>>(path: P) -> Result<()> {
     }
   };
   result.iter().for_each(|i| info!("{:?}", i));
-  let mut state = Typing::new();
+  let mut state = Typing::new(path.as_ref().to_path_buf(), workdir.as_ref().to_path_buf());
 
   let result = typing::parse_file(&mut state, &result);
   for (id, info) in &state.infos {
@@ -74,7 +75,23 @@ fn main() -> Result<()> {
     _ => "trace",
   };
   flexi_logger::Logger::try_with_env_or_str(format!("cli={v},eth_dance={v},ethers=debug", v=verbose_str)).unwrap().start().ok();
-
-  run(&opts.path)?;
+  let workdir = match &opts.workdir {
+    Some(dir) => Path::new(dir).to_path_buf(),
+    None => {
+      let mut current_dir = std::env::current_dir()?;
+      while !current_dir.join("foundry.toml").exists() {
+        if let Some(parent) = current_dir.parent() {
+          current_dir = parent.to_path_buf();
+        } else {
+          current_dir = std::env::current_dir()?;
+          warn!("cannot found foundry, use {}", current_dir.to_string_lossy());
+          break
+        }
+      }
+      debug!("found foundry, use {}", current_dir.to_string_lossy());
+      current_dir.to_path_buf()
+    }
+  };
+  run(&opts.filename, workdir)?;
   Ok(())
 }

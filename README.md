@@ -9,6 +9,11 @@ a full examples could be like:
 ```shell
 account1 = key"0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 account2 = key"0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+
+# load contracts "@/" means starts from project root (foundry.toml)
+CounterFactory = contract"@/out/counter.sol/CounterFactory.json"
+Counter = contract"@/out/counter.sol/Counter.json"
+
 # set confirmation check interval (in seconds)
 $confirm_interval = 1
 # set endpoint
@@ -23,7 +28,7 @@ counter_factory = :deploy(CounterFactory)
 # note that `:` means send_transaction while `.` means call
 counter_factory:create(1.2q64: U256, 1eth)
 # annotate returning value is a contract `Counter`
-counter: "Counter" = counter_factory.get_counter()
+counter: Counter = counter_factory.get_counter()
 counter:set_admin($account)
 #counter = :deploy(Counter)
 
