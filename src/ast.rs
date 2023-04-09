@@ -138,7 +138,7 @@ pub struct ExprLit {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NumberSuffix {
-  #[default] None, Signed, Q(bool, usize), F(bool, usize), E(bool, usize),
+  #[default] None, Signed, Q(bool, usize), F(usize), E(bool, usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -169,7 +169,7 @@ impl std::fmt::Display for NumberSuffix {
       NumberSuffix::None => write!(f, ""),
       NumberSuffix::Signed => write!(f, "i"),
       NumberSuffix::Q(_, i) => write!(f, "{}q{}", u, i),
-      NumberSuffix::F(_, i) => write!(f, "f{}{}", i, u),
+      NumberSuffix::F(i) => write!(f, "f{}{}", i, u),
 
       NumberSuffix::E(true, 18) => write!(f, "eth"),
       NumberSuffix::E(true, 9) => write!(f, "gwei"),
@@ -182,8 +182,8 @@ impl NumberSuffix {
   pub fn is_unsigned(self) -> bool {
     match self {
       NumberSuffix::None => true,
-      NumberSuffix::Signed => false,
-      NumberSuffix::E(b, _) | NumberSuffix::F(b, _) | NumberSuffix::Q(b, _)
+      NumberSuffix::Signed | NumberSuffix::F(_) => false,
+      NumberSuffix::E(b, _) | NumberSuffix::Q(b, _)
         => b
     }
   }
@@ -479,7 +479,12 @@ fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
     }
   } else { None };
   let result = match str.chars().nth(0) {
-    Some('f') => NumberSuffix::F(is_u, n.unwrap_or(64)),
+    Some('f') => {
+      if is_u {
+        warn!("fixme: f cannot with u, error")
+      }
+      NumberSuffix::F(n.unwrap_or(64))
+    },
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
     Some('e') => NumberSuffix::E(is_u, n.unwrap_or(0)),
     _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), span, at: Rule::number_suffix }),

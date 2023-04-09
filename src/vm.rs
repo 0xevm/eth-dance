@@ -88,7 +88,19 @@ impl TryFrom<TypedNumber> for Value {
           abi: ethabi::ParamType::Int(256), ty,
         }
       },
-      NumberSuffix::F(_, _) => {
+      NumberSuffix::F(size) if [32, 64].contains(&size) => {
+        let bytes = match size {
+          32 => f32::from_str(base.to_string().as_str()).map_err(|_| "f32 convert")?.to_bits().to_be_bytes().to_vec(),
+          64 => f64::from_str(base.to_string().as_str()).map_err(|_| "f64 convert")?.to_bits().to_be_bytes().to_vec(),
+          _ => unreachable!()
+        };
+        assert_eq!(bytes.len(), size/8);
+        Value {
+          abi: ethabi::ParamType::FixedBytes(bytes.len()), ty,
+          token: ethabi::Token::FixedBytes(bytes),
+        }
+      },
+      NumberSuffix::F(_) => {
         warn!("fixme: ieee");
         Value {
           token: ethabi::Token::Int(I256::zero().into_raw()),
