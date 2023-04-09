@@ -18,7 +18,7 @@ pub use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct Value {
-  pub value: ethabi::Token,
+  pub token: ethabi::Token,
   pub abi: ethabi::ParamType,
   pub ty: Option<Type>,
 }
@@ -26,7 +26,7 @@ pub struct Value {
 impl From<Address> for Value {
   fn from(value: Address) -> Self {
     Self {
-      value: ethabi::Token::Address(value),
+      token: ethabi::Token::Address(value),
       abi: ethabi::ParamType::Address,
       ty: None,
     }
@@ -44,7 +44,7 @@ impl TryFrom<TypedNumber> for Value {
           return Err("cannot convert raw float to int")
         }
         let v = U256::from_dec_str(&value.value).map_err(|_| "convert to U256 failed")?;
-        return Ok(Value { value: ethabi::Token::Uint(v), abi: ethabi::ParamType::Uint(256), ty })
+        return Ok(Value { token: ethabi::Token::Uint(v), abi: ethabi::ParamType::Uint(256), ty })
       },
       _ => {}
     }
@@ -70,7 +70,7 @@ impl TryFrom<TypedNumber> for Value {
         }
         trace!("{}", base.to_string());
         Value {
-          value: ethabi::Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
+          token: ethabi::Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
           abi: ethabi::ParamType::Uint(256), ty,
         }
       },
@@ -84,14 +84,14 @@ impl TryFrom<TypedNumber> for Value {
         }
         trace!("{}", base.to_string());
         Value {
-          value: ethabi::Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
+          token: ethabi::Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
           abi: ethabi::ParamType::Int(256), ty,
         }
       },
       NumberSuffix::F(_, _) => {
         warn!("fixme: ieee");
         Value {
-          value: ethabi::Token::Int(I256::zero().into_raw()),
+          token: ethabi::Token::Int(I256::zero().into_raw()),
           abi: ethabi::ParamType::Int(256), ty,
         }
       },
@@ -109,7 +109,7 @@ impl TryFrom<TypedString> for Value {
     if value.prefix.is_none() {
       let string = String::from_utf8(value.value).map_err(|_| "utf8")?;
       return Ok(Value {
-        value: ethabi::Token::String(string),
+        token: ethabi::Token::String(string),
         abi: ethabi::ParamType::String, ty,
       })
     }
@@ -122,7 +122,7 @@ impl TryFrom<TypedString> for Value {
       "address" => {
         let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
         return Ok(Value {
-          value: Token::Address(Address::from_slice(&addr)),
+          token: Token::Address(Address::from_slice(&addr)),
           abi: ParamType::Address, ty,
         })
       }
@@ -132,7 +132,7 @@ impl TryFrom<TypedString> for Value {
       _ => return Err("unknown prefix"),
     };
     Ok(Value {
-      value: ethabi::Token::Bytes(bytes),
+      token: ethabi::Token::Bytes(bytes),
       abi: ethabi::ParamType::Bytes, ty
     })
   }
@@ -159,19 +159,19 @@ impl VM {
   }
   pub fn set_builtin(&mut self, name: &str, value: &Value) {
     match name {
-      "$endpoint" => match &value.value {
+      "$endpoint" => match &value.token {
         Token::String(s) => {
           *self.provider.url_mut() = url::Url::parse(s).unwrap();
         }
         _ => unreachable!()
       }
-      "$account" => match &value.value {
+      "$account" => match &value.token {
         Token::Bytes(bytes) => {
           self.wallet = Some(LocalWallet::from_bytes(bytes).unwrap());
         }
         _ => unreachable!()
       }
-      "$confirm_interval" => match &value.value {
+      "$confirm_interval" => match &value.token {
         Token::Uint(i) => {
           self.confirm_interval = Some(i.as_u64() as _)
         }
@@ -182,7 +182,7 @@ impl VM {
     self.builtin.insert(name.to_string(), value.clone());
   }
   pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
-    trace!("set_value: {:?} = {}", id, value.value);
+    trace!("set_value: {:?} = {}", id, value.token);
     let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
       self.set_builtin(&info.display, &value);
@@ -191,7 +191,7 @@ impl VM {
     Ok(())
   }
   pub fn get_address(&self, id: Id) -> Option<Address> {
-    match self.values.get(&id)?.value {
+    match self.values.get(&id)?.token {
       Token::Address(addr) => Some(addr),
       _ => None,
     }
@@ -231,22 +231,23 @@ pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, &'static str> {
       },
     (Type::Contract(_), ethabi::ParamType::Uint(_))
       => {
-        let new_value: Address = match value.value {
+        let new_value: Address = match value.token {
           Token::Uint(i) | Token::Int(i) =>
             try_convert_u256_to_h256(i).into(),
           _ => unreachable!(),
         };
-        value.value = Token::Address(new_value);
+        value.token = Token::Address(new_value);
         value.abi = ParamType::Address;
         value
       }
     (Type::NoneType, _) => {
-      value.value = Token::FixedBytes(vec![]);
+      value.token = Token::FixedBytes(vec![]);
       value.abi = ParamType::FixedBytes(0);
       value
     }
+    (Type::Abi(x), y) if x == y => value,
     _ => {
-      warn!("fixme: convert to ty: {:?} => {:?}", value.abi, ty);
+      warn!("fixme: convert to ty: {:?} => {:?}: {}", value.abi, ty, value.token);
       value
     }
   };
@@ -280,7 +281,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           trace!("contract name {}", contract_name);
           let bytecode = match vm.values.get(&this) {
-            Some(Value { value: ethabi::Token::Bytes(bytes), ..}) => bytes,
+            Some(Value { token: ethabi::Token::Bytes(bytes), ..}) => bytes,
             _ => anyhow::bail!("vm: contract bytecode not present"),
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
@@ -321,8 +322,8 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
 fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
   let out = match (func.ns.as_str(), func.name.as_str()) {
     ("@assert", "eq") => {
-      if args[0].value != args[1].value {
-        anyhow::bail!("vm: assert_eq failed: {} != {}", args[0].value, args[1].value)
+      if args[0].token != args[1].token {
+        anyhow::bail!("vm: assert_eq failed: {} != {}", args[0].token, args[1].token)
       }
       vec![]
     }
@@ -357,7 +358,7 @@ async fn do_call_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<ethabi::
 }
 
 fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
-  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
@@ -365,14 +366,14 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   do_send_tx_sync(vm, tx)?;
   Ok(Value {
-    value: Token::Uint(U256::zero()),
+    token: Token::Uint(U256::zero()),
     abi: ethabi::ParamType::Uint(256),
     ty: None,
   })
 }
 
 fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
-  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
@@ -386,7 +387,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
 }
 
 fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
-  let tokens = args.iter().map(|i| i.value.clone()).collect::<Vec<_>>();
+  let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   info!("deploy_contract: {} {} to {}", contract_name, bytecode.len(), vm.provider.url());
   let mut input_data = Vec::new();
   input_data.extend_from_slice(bytecode);

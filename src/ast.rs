@@ -201,7 +201,7 @@ pub struct TypedString {
 
 #[derive(Debug, Default)]
 pub struct Funccall {
-  pub scope: Option<Ident>,
+  pub scope: Ident,
   pub dot: Accessor,
   pub name: Ident,
   pub args: Vec<ExprLit>,
@@ -316,7 +316,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut funccall = Funccall::default();
   funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.scope = Some(parse_ident(pairs.next().expect("pairs: funccall => item"))?);
+    funccall.scope = parse_ident(pairs.next().expect("pairs: funccall => item"))?;
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {

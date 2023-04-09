@@ -75,13 +75,13 @@ impl FuncImpl {
   pub fn to_output(&self, mut out: Vec<Token>) -> Value {
     if out.len() == 1 {
       Value {
-        value: out.remove(0),
+        token: out.remove(0),
         abi: self.output_types[0].clone(),
         ty: None,
       }
     } else {
       Value {
-        value: Token::Tuple(out),
+        token: Token::Tuple(out),
         abi: ParamType::Tuple(self.output_types.clone()),
         ty: None,
       }
