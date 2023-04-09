@@ -3,9 +3,10 @@ use std::{collections::BTreeMap, rc::Rc};
 pub use anyhow::Result;
 pub use ethabi::Contract as ContractAbi;
 pub use ethabi::Function as FunctionAbi;
-use ethabi::{ParamType};
+use ethabi::{ParamType, Token};
 
 use crate::typing::Type;
+use crate::vm::Value;
 
 #[derive(Debug)]
 pub struct Scope {
@@ -16,7 +17,7 @@ pub struct Scope {
 }
 
 pub type Func = Rc<FuncImpl>;
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FuncImpl {
   pub ns: String,
   pub name: String,
@@ -70,6 +71,22 @@ impl FuncImpl {
       Type::Abi(ethabi::ParamType::Tuple(outputs))
     }
   }
+
+  pub fn to_output(&self, mut out: Vec<Token>) -> Value {
+    if out.len() == 1 {
+      Value {
+        value: out.remove(0),
+        abi: self.output_types[0].clone(),
+        ty: None,
+      }
+    } else {
+      Value {
+        value: Token::Tuple(out),
+        abi: ParamType::Tuple(self.output_types.clone()),
+        ty: None,
+      }
+    }
+  }
 }
 
 pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
@@ -97,30 +114,27 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
   Ok(Scope::new(name, abi, bytecode))
 }
 
-pub fn globals(scope_name: &'static str) -> Scope {
-  let mut abi = ContractAbi {
-    constructor: None,
-    functions: BTreeMap::new(),
-    events: Default::default(),
-    errors: Default::default(),
-    receive: Default::default(),
-    fallback: Default::default(),
-  };
-  abi.functions.insert("deploy".to_string(), vec![
-    FunctionAbi {
-      name: "deploy".to_string(),
-      inputs: vec![],
-      outputs: vec![ethabi::Param { name: "".to_string(), kind: ethabi::ParamType::Address, internal_type: None }],
-      constant: None,
-      state_mutability: ethabi::StateMutability::Payable
-    }]);
-  abi.functions.insert("assert_eq".to_string(), vec![
-    FunctionAbi {
-      name: "assert_eq".to_string(),
-      inputs: vec![ethabi::Param { name: "a".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }, ethabi::Param { name: "b".to_string(), kind: ethabi::ParamType::Bytes, internal_type: None }],
-      outputs: vec![ethabi::Param { name: "".to_string(), kind: ethabi::ParamType::Address, internal_type: None }],
-      constant: None,
-      state_mutability: ethabi::StateMutability::Pure
-    }]);
-  Scope::new(scope_name, abi, None)
+pub fn global_scope(scope_name: &'static str, funcs: &[(&str, Vec<ParamType>, Vec<ParamType>)]) -> Scope {
+  let mut scope = Scope { name: scope_name.to_string(), abi: None, bytecode: None, funcs: BTreeMap::new() };
+  for (n, input, output) in funcs {
+    scope.funcs.entry(n.to_string()).or_default().push(Func::new(
+      FuncImpl {
+        ns: scope_name.to_string(), name: n.to_string(),
+        abi: None, signature: Default::default(), selector: Default::default(),
+        input_types: input.clone(), output_types: output.clone(),
+      }));
+  }
+  scope
+}
+
+pub fn globals() -> Vec<Scope> {
+  vec![
+    global_scope("@Global", &[
+      ("deploy", vec![], vec![ParamType::Address]),
+    ]),
+
+    global_scope("@assert", &[
+      ("eq", vec![ParamType::Bytes, ParamType::Bytes], vec![]),
+    ]),
+  ]
 }

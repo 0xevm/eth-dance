@@ -63,7 +63,7 @@ impl Error {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum Type {
   #[default] NoneType,
-  Global,
+  Global(String),
   ContractType(String),
   Contract(String),
   Function(String, String),
@@ -131,8 +131,9 @@ pub struct Typing {
 impl Typing {
   pub fn new() -> Self {
     let mut contracts = BTreeMap::new();
-    contracts.insert("@Global".to_string(), globals("@Global"));
-    // contracts.insert("assert".to_string(), globals("assert"));
+    for scope in globals() {
+      contracts.insert(scope.name.to_string(), scope);
+    }
     Self {
       last_id: Id(0),
       infos: BTreeMap::new(),
@@ -311,14 +312,16 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<(Option<Id>, String, S
         this = Some(id);
         trace!("func scope: {} {:?}", name, state.get_info(id));
         state.get_info(id).ty().clone()
+      } else if state.contracts.contains_key(&name) {
+        Type::Global(name)
       } else {
         Type::NoneType
       }
     }
-    None => Type::Global,
+    None => Type::Global("@Global".to_string()),
   };
   let scope_str = match scope {
-    Type::Global => "@Global".to_string(),
+    Type::Global(name) => name.to_string(),
     Type::Contract(name) => name.clone(),
     _ => return Err(Error::ScopeNotContract(scope, i.span.clone())),
   };

@@ -285,10 +285,10 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
           vm.set_value(*id, info, result.unwrap().into())?;
-        } else if func.ns == "@Global" && func.name == "assert_eq" && !*send {
-          if args[0].value != args[1].value {
-            anyhow::bail!("vm: assert_eq failed: {} != {}", args[0].value, args[1].value)
-          }
+        } else if func.ns.starts_with("@") {
+          let result = call_global(vm, func.clone(), &args)?;
+          vm.set_value(*id, info, result)?;
+
         } else if let Some(this) = this {
           trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
           let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
@@ -316,6 +316,19 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
     }
   }
   Ok(())
+}
+
+fn call_global(vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
+  let out = match (func.ns.as_str(), func.name.as_str()) {
+    ("@assert", "eq") => {
+      if args[0].value != args[1].value {
+        anyhow::bail!("vm: assert_eq failed: {} != {}", args[0].value, args[1].value)
+      }
+      vec![]
+    }
+    _ => unreachable!()
+  };
+  Ok(func.to_output(out))
 }
 
 #[tokio::main]
@@ -366,20 +379,8 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   let bytes = do_call_tx_sync(vm, tx)?;
-  let mut out = ethabi::decode(&func.output_types, &bytes)?;
-  let result = if out.len() == 1 {
-    Value {
-      value: out.remove(0),
-      abi: func.output_types[0].clone(),
-      ty: None,
-    }
-  } else {
-    Value {
-      value: Token::Tuple(out),
-      abi: ParamType::Tuple(func.output_types.clone()),
-      ty: None,
-    }
-  };
+  let out = ethabi::decode(&func.output_types, &bytes)?;
+  let result = func.to_output(out);
   // vm.provider.
   Ok(result)
 }

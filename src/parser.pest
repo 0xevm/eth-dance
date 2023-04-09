@@ -5,7 +5,7 @@ dot = { ":" | "." }
 args = { arg ~ ("," ~ arg)* }
 funccall = { ident? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 
-ident = @{ "$"? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+ident = @{ ("$"|"@")? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 int = @{ ASCII_DIGIT+ }
 float = @{ int ~ "." ~ int }
 number_suffix = @{
