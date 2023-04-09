@@ -130,8 +130,8 @@ impl std::fmt::Display for Ident {
 }
 
 #[derive(Debug, Default)]
-pub struct Expr {
-  pub expr: ExprKind,
+pub struct ExprLit {
+  pub inner: ExprKind,
   pub hint: String, // TODO Type::from_str
   pub span: Span,
 }
@@ -204,7 +204,7 @@ pub struct Funccall {
   pub scope: Option<Ident>,
   pub dot: Accessor,
   pub name: Ident,
-  pub args: Vec<Expr>,
+  pub args: Vec<ExprLit>,
   pub dot_span: Span,
   pub args_span: Span,
   pub span: Span,
@@ -221,9 +221,9 @@ pub enum ExprKind {
 
 #[derive(Debug, Default)]
 pub struct Stmt {
-  pub lhs: Option<Expr>,
+  pub lhs: Option<ExprLit>,
   pub equal_span: Option<Span>,
-  pub rhs: Expr,
+  pub rhs: ExprLit,
   pub newline_span: Option<Span>,
   pub span: Span,
 }
@@ -286,13 +286,13 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
   }
 }
 
-fn parse_expr(pair: Pair<Rule>) -> Result<Expr> {
+fn parse_expr(pair: Pair<Rule>) -> Result<ExprLit> {
   assert_eq!(pair.as_rule(), Rule::expr);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let expr = parse_expr_inner(pairs.next().expect("pairs: expr => inner"))?;
-  Ok(Expr {
-    expr, span, hint: String::new(),
+  Ok(ExprLit {
+    inner: expr, span, hint: String::new(),
   })
 }
 
@@ -343,7 +343,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
 }
 
 // args = { arg ~ ("," ~ arg)* }
-fn parse_args(pair: Pair<Rule>) -> Result<Vec<Expr>> {
+fn parse_args(pair: Pair<Rule>) -> Result<Vec<ExprLit>> {
   assert_eq!(pair.as_rule(), Rule::args);
   let span = pair.as_span().into();
   let result = pair.into_inner().map(parse_arg).collect::<Vec<_>>();
@@ -351,7 +351,7 @@ fn parse_args(pair: Pair<Rule>) -> Result<Vec<Expr>> {
 }
 
 // arg = { expr ~ (":" ~ type)? }
-fn parse_arg(pair: Pair<Rule>) -> Result<Expr> {
+fn parse_arg(pair: Pair<Rule>) -> Result<ExprLit> {
   assert_eq!(pair.as_rule(), Rule::arg);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
@@ -365,14 +365,14 @@ fn parse_arg(pair: Pair<Rule>) -> Result<Expr> {
 }
 
 // item = { ident ~ (":" ~ type)? }
-fn parse_item(pair: Pair<Rule>) -> Result<Expr> {
+fn parse_item(pair: Pair<Rule>) -> Result<ExprLit> {
   assert_eq!(pair.as_rule(), Rule::item);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
-  let mut result = Expr::default();
+  let mut result = ExprLit::default();
   let pair = pairs.next().expect("pairs: item => ident");
   let ident = parse_ident(pair)?;
-  result.expr = ExprKind::Ident(ident);
+  result.inner = ExprKind::Ident(ident);
   if let Some(pair) = pairs.next() {
     result.hint = parse_type(pair)?;
   }

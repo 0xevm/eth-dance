@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use crate::{
-  ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, Expr, Funccall, TypedNumber, TypedString},
+  ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Scope, Func, globals},
 };
 
@@ -73,7 +73,7 @@ pub enum Type {
 }
 
 #[derive(Debug, Default)]
-pub enum ExprT {
+pub enum ExprCode {
   #[default] None,
   Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
   Expr(Id),
@@ -84,10 +84,10 @@ pub enum ExprT {
 #[derive(Debug, Default)]
 pub struct Expression {
   pub returns: Type,
-  pub t: ExprT,
+  pub code: ExprCode,
   pub span: Span,
 }
-impl std::fmt::Display for ExprT {
+impl std::fmt::Display for ExprCode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::None => write!(f, "()"),
@@ -149,7 +149,7 @@ impl Typing {
     self.get_info(id).display = contract.name.to_string();
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
-      self.get_info(id).expr.t = ExprT::String(TypedString { prefix: Some("hex".to_string()), value: bytecode.to_string().into(), span: Span::default() });
+      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: Some("hex".to_string()), value: bytecode.to_string().into(), span: Span::default() });
       self.get_info(id).expr.returns = Type::String("hex".to_string())
     }
     self.contracts.insert(contract.name.to_string(), contract);
@@ -175,7 +175,7 @@ impl Typing {
 
   pub fn insert_expr(&mut self, expr: Expression) -> Id {
     let id = self.insert_name("", expr.span.clone());
-    trace!("insert expr: {:?} {:?}", id, expr.t);
+    trace!("insert expr: {:?} {:?}", id, expr.code);
     self.get_info(id).expr = expr;
     id
   }
@@ -221,7 +221,7 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
   let id = match &stmt.lhs {
     Some(expr) => {
-      let id = match &expr.expr {
+      let id = match &expr.inner {
         ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
         _ => unreachable!("expr should must be ident"),
       };
@@ -242,15 +242,15 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
   Ok(())
 }
 
-pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
+pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
   let mut result = Expression::default();
-  match &expr.expr {
+  match &expr.inner {
     ExprKind::Ident(i) => {
       let dst = state.find_name(&i.to_string());
       match dst {
         Some(dst) => {
           result.returns = state.get_info(dst).ty().clone();
-          result.t = ExprT::Expr(dst);
+          result.code = ExprCode::Expr(dst);
         },
         None => return Err(Error::NameNotFound(i.to_string(), i.span.clone()))
       }
@@ -262,8 +262,8 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
         if args.is_empty() {
           return Err(Error::InferTypeFailed(scope, "deploy:this".to_string(), i.span.clone()))
         }
-        this = match args.remove(0).t {
-          ExprT::Expr(i) => Some(i),
+        this = match args.remove(0).code {
+          ExprCode::Expr(i) => Some(i),
           _ => todo!()
         };
       }
@@ -288,15 +288,15 @@ pub fn parse_expr(state: &mut Typing, expr: &Expr) -> Result<Expression> {
           None => return Err(Error::InferTypeFailed(scope, name, i.span.clone()))
         }
       };
-      result.t = ExprT::Func { func, this, args: arg_ids, send: i.dot.is_send() };
+      result.code = ExprCode::Func { func, this, args: arg_ids, send: i.dot.is_send() };
     },
     ExprKind::String(i) => {
       result.returns = Type::String(i.prefix.clone().unwrap_or_default());
-      result.t = ExprT::String(i.clone());
+      result.code = ExprCode::String(i.clone());
     },
     ExprKind::Number(i) => {
       result.returns = Type::Number(i.suffix.clone());
-      result.t = ExprT::Number(i.clone());
+      result.code = ExprCode::Number(i.clone());
     },
     _ => unreachable!(),
   };

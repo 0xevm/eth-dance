@@ -98,10 +98,10 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
       let abi = map.get("abi").unwrap();
       abi_input = serde_json::to_string(abi)?;
     }
-    if map.contains_key("bytecode") {
-      bytecode = map.get("bytecode").unwrap().as_str().map(|i| i.to_string());
+    if let Some(bytecode_obj) = map.get("bytecode") {
+      bytecode = bytecode_obj.as_str().map(|i| i.to_string());
       if bytecode.is_none() {
-        bytecode = map.get("bytecode").unwrap().as_object().and_then(|i| i.get("object")).and_then(|i| i.as_str()).map(|i| i.to_string());
+        bytecode = bytecode_obj.as_object().and_then(|i| i.get("object")).and_then(|i| i.as_str()).map(|i| i.to_string());
       }
     }
   }

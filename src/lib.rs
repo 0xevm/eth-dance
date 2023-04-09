@@ -40,7 +40,7 @@ mod tests {
     state.add_scope(contract2);
     let result = typing::parse_file(&mut state, &result);
     for (id, info) in &state.infos {
-      debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.t);
+      debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.code);
     }
     match result {
       Ok(result) => result,

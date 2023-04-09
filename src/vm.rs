@@ -5,7 +5,7 @@ use ethabi::{Token, ParamType};
 use ethers::{types::{I256, U256, H256, Address, TransactionRequest, TransactionReceipt}, providers::Middleware, signers::{LocalWallet, Signer}};
 
 use crate::{
-  typing::{Typing, ExprT, Id, Type, Info},
+  typing::{Typing, ExprCode, Id, Type, Info},
   ast::{TypedNumber, NumberSuffix, TypedString},
   abi::Func
 };
@@ -256,11 +256,11 @@ pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, &'static str> {
 
 pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   for (id, info) in &typing.infos {
-    match &info.expr.t {
-      ExprT::None => {
+    match &info.expr.code {
+      ExprCode::None => {
         warn!("expr is none: {:?}", id)
       }
-      ExprT::Expr(i) => {
+      ExprCode::Expr(i) => {
         let value = if let Some(value) = vm.values.get(i) {
           value.clone()
         } else {
@@ -268,7 +268,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
         };
         vm.set_value(*id, info, value)?;
       }
-      ExprT::Func { func, this, args, send } => {
+      ExprCode::Func { func, this, args, send } => {
         let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
         if func.ns == "@Global" && func.name == "deploy" && *send {
           let this = this.unwrap();
@@ -302,11 +302,11 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           unreachable!()
         }
       }
-      ExprT::Number(number) => {
+      ExprCode::Number(number) => {
         let value = Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
         vm.set_value(*id, info, value)?;
       }
-      ExprT::String(string) => {
+      ExprCode::String(string) => {
         let value = Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
         vm.set_value(*id, info, value)?;
       }
@@ -318,7 +318,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   Ok(())
 }
 
-fn call_global(vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
+fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
   let out = match (func.ns.as_str(), func.name.as_str()) {
     ("@assert", "eq") => {
       if args[0].value != args[1].value {
