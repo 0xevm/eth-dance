@@ -117,15 +117,15 @@ impl TryFrom<TypedString> for Value {
   type Error = &'static str;
 
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
-    let ty = Some(Type::String(value.prefix.clone().unwrap_or_default()));
-    if value.prefix.is_none() {
+    let ty = Some(Type::String(value.prefix.clone()));
+    if value.prefix.is_empty() {
       let string = String::from_utf8(value.value).map_err(|_| "utf8")?;
       return Ok(Value {
         token: ethabi::Token::String(string),
         abi: ethabi::ParamType::String, ty,
       })
     }
-    let prefix = value.prefix.unwrap();
+    let prefix = value.prefix;
     let bytes = match prefix.as_str() {
       "hex" | "key" => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;

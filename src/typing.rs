@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
-  abi::{Scope, Func, globals},
+  abi::{Scope, Func, globals, load_abi},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -12,11 +12,15 @@ pub enum Error {
   #[error("typing: name not found {0:?} at {1:?}")]
   NameNotFound(String, Span),
   #[error("typing: scope not contract {0:?} at {1:?}")]
-  ScopeNotContract(Option<Type>, Span),
+  ScopeNotContract(Type, Span),
   #[error("typing: func not found {0}.{1} at {2:?}")]
   FuncNotFound(String, String, Span),
   #[error("typing: infer type failed {0}.{1} at {1:?}")]
   InferTypeFailed(String, String, Span),
+  #[error("typing: io {0:?} path={1} at {2:?}")]
+  Io(#[source] std::io::Error, String, Span),
+  #[error("typing: abi {0:?} path={1} at {2:?}")]
+  Abi(#[source] anyhow::Error, String, Span),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -142,17 +146,18 @@ impl Typing {
     }
   }
 
-  pub fn add_scope(&mut self, contract: Scope) {
+  pub fn add_scope(&mut self, contract: Scope) -> Id {
     let id = self.new_id();
     self.infos.entry(id).or_default();
     self.found.insert(contract.name.to_string(), id);
     self.get_info(id).display = contract.name.to_string();
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
-      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: Some("hex".to_string()), value: bytecode.to_string().into(), span: Span::default() });
+      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: "hex".to_string(), value: bytecode.to_string().into(), span: Span::default() });
       self.get_info(id).expr.returns = Type::String("hex".to_string())
     }
     self.contracts.insert(contract.name.to_string(), contract);
+    id
   }
 
   pub fn new_id(&mut self) -> Id {
@@ -226,9 +231,18 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
         _ => unreachable!("expr should must be ident"),
       };
       if !expr.hint.is_empty() {
-        if expr.hint.starts_with('"') {
-          trace!("hint: {}", expr.hint);
-          state.get_info(id).should = Some(Type::Contract(expr.hint.trim_matches('"').to_string()))
+        if expr.hint.starts_with('@') {
+          let hint = expr.hint.trim_start_matches('@');
+          let contract_id = state.find_name(hint);
+          let contract = contract_id.map(|id| state.get_info(id).ty().clone());
+          trace!("hint: {} => {:?}", expr.hint, contract);
+          match contract {
+            Some(Type::ContractType(s)) =>
+              state.get_info(id).should = Some(Type::Contract(s)),
+            _ => {
+              warn!("fixme: contract not found");
+            }
+          }
         } else {
           warn!("fixme: built-in hint {}", expr.hint);
         }
@@ -260,8 +274,8 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       let code = parse_func(state, i)?;
       if let ExprCode::Func { func, this, .. } = &code {
         if func.ns == "@Global" && func.name == "deploy" {
-          result.returns = match &state.get_info(this.unwrap()).should {
-            Some(Type::ContractType(i)) => Type::Contract(i.to_string()),
+          result.returns = match state.get_info(this.unwrap()).ty() {
+            Type::ContractType(i) => Type::Contract(i.to_string()),
             t => return Err(Error::ScopeNotContract(t.clone(), span.clone())),
           };
         } else {
@@ -272,8 +286,22 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       }
       result.code = code;
     },
+    ExprKind::String(i) if i.prefix == "contract" => {
+      let path = String::from_utf8(i.value.clone()).unwrap();
+      let resolved_path = if let Some(path) = path.strip_prefix("./") {
+        warn!("fixme: resolve path related to work");
+        format!("@/fixtures/{}", path)
+      } else { path.clone() };
+      assert!(resolved_path.starts_with("@/")); // TODO_assert
+      let real_path = path.replace("@/", "./");
+      let content = std::fs::read_to_string(real_path).map_err(|e| Error::Io(e, resolved_path.clone(), span.clone()))?;
+      let scope = load_abi(&resolved_path, &content).map_err(|e| Error::Abi(e, resolved_path.clone(), span.clone()))?;
+      let id = state.add_scope(scope);
+      result.returns = Type::ContractType(resolved_path);
+      result.code = ExprCode::Expr(id);
+    },
     ExprKind::String(i) => {
-      result.returns = Type::String(i.prefix.clone().unwrap_or_default());
+      result.returns = Type::String(i.prefix.clone());
       result.code = ExprCode::String(i.clone());
     },
     ExprKind::Number(i) => {
@@ -305,7 +333,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let scope_str = match scope_ty {
     Type::Global(name) => name.to_string(),
     Type::Contract(name) => name.clone(),
-    _ => return Err(Error::ScopeNotContract(Some(scope_ty), i.span.clone())),
+    _ => return Err(Error::ScopeNotContract(scope_ty, i.span.clone())),
   };
 
   let name = i.name.to_string();

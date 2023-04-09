@@ -33,11 +33,6 @@ fn run<P: AsRef<Path>>(path: P) -> Result<()> {
   result.iter().for_each(|i| info!("{:?}", i));
   let mut state = Typing::new();
 
-  let contract1 = load_abi("CounterFactory", include_str!("../out/counter.sol/CounterFactory.json"))?;
-  let contract2 = load_abi("Counter", include_str!("../out/counter.sol/Counter.json"))?;
-  info!("{:?}", contract1);
-  state.add_scope(contract1);
-  state.add_scope(contract2);
   let result = typing::parse_file(&mut state, &result);
   for (id, info) in &state.infos {
     debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.code);
@@ -49,7 +44,7 @@ fn run<P: AsRef<Path>>(path: P) -> Result<()> {
       for i in e.inner_errors() {
         error!("typing error: {}\n{:?}", i.show_pos(&input, line_index.clone()), i);
       }
-      anyhow::bail!("parse failed")
+      anyhow::bail!("typing failed")
     }
   };
 

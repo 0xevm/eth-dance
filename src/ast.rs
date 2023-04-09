@@ -152,7 +152,7 @@ pub struct TypedNumber {
 
 impl std::fmt::Display for TypedString {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}{:?}", self.prefix.as_ref().unwrap_or(&String::new()), String::from_utf8_lossy(&self.value))
+    write!(f, "{}{:?}", self.prefix, String::from_utf8_lossy(&self.value))
   }
 }
 
@@ -193,7 +193,7 @@ pub type StringPrefix = String;
 
 #[derive(Debug, Clone, Default)]
 pub struct TypedString {
-  pub prefix: Option<StringPrefix>,
+  pub prefix: StringPrefix,
   pub value: Vec<u8>,
   // pub value_span: Span,
   pub span: Span,
@@ -408,7 +408,7 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
-    result.prefix = Some(parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string())
+    result.prefix = parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string()
   }
   for pair in pairs {
     let s = pair.as_str();
