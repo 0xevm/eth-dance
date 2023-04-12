@@ -189,6 +189,14 @@ impl NumberSuffix {
   }
 }
 
+impl std::str::FromStr for NumberSuffix {
+  type Err = Error;
+
+  fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    parse_number_suffix(s, Span::default())
+  }
+}
+
 pub type StringPrefix = String;
 
 #[derive(Debug, Clone, Default)]
