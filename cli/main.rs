@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use eth_dance::{
   ast,
-  typing::{self, Typing},
+  typing::{self, Typing, Type},
   vm::{self, VM}
 };
 
@@ -55,13 +55,22 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
     debug!("vm: {:?} = {:?}", id, value);
   }
   for (id, value) in &vm.values {
-    debug!("vm: {:?} = {:?}", id, value);
+    trace!("vm: {:?} = {:?}", id, value);
   }
   debug!("last_id: {:?}", state.last_id);
   result?;
   for (name, id) in &state.found {
     // warn!("name: {} {:?}", name, id);
     let value = vm.values.get(id).unwrap();
+    match value.ty {
+      Some(Type::ContractType(_)) => {
+        if let ethabi::Token::Bytes(i) = &value.token {
+          info!("vm: {:?} = [{}] hash={} len={}", name, value.abi, ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
+          continue;
+        }
+      }
+      _ => {},
+    }
     info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
   }
   Ok(())

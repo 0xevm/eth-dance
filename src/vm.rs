@@ -18,16 +18,16 @@ pub use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct Value {
-  pub token: ethabi::Token,
-  pub abi: ethabi::ParamType,
+  pub token: Token,
+  pub abi: ParamType,
   pub ty: Option<Type>,
 }
 
 impl From<Address> for Value {
   fn from(value: Address) -> Self {
     Self {
-      token: ethabi::Token::Address(value),
-      abi: ethabi::ParamType::Address,
+      token: Token::Address(value),
+      abi: ParamType::Address,
       ty: None,
     }
   }
@@ -44,7 +44,7 @@ impl TryFrom<TypedNumber> for Value {
           return Err("cannot convert raw float to int")
         }
         let v = U256::from_dec_str(&value.value).map_err(|_| "convert to U256 failed")?;
-        return Ok(Value { token: ethabi::Token::Uint(v), abi: ethabi::ParamType::Uint(256), ty })
+        return Ok(Value { token: Token::Uint(v), abi: ParamType::Uint(256), ty })
       },
       _ => {}
     }
@@ -69,8 +69,8 @@ impl TryFrom<TypedNumber> for Value {
         }
         trace!("try_from(Value<=TypedNumber): base(u) = {}", base.to_string());
         Value {
-          token: ethabi::Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
-          abi: ethabi::ParamType::Uint(256), ty,
+          token: Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
+          abi: ParamType::Uint(256), ty,
         }
       },
       NumberSuffix::Q(false, _) | NumberSuffix::E(false, _) => {
@@ -83,8 +83,8 @@ impl TryFrom<TypedNumber> for Value {
         }
         trace!("try_from(Value<=TypedNumber): base(i) = {}", base.to_string());
         Value {
-          token: ethabi::Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
-          abi: ethabi::ParamType::Int(256), ty,
+          token: Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
+          abi: ParamType::Int(256), ty,
         }
       },
       NumberSuffix::F(size) if [32, 64].contains(&size) => {
@@ -95,15 +95,15 @@ impl TryFrom<TypedNumber> for Value {
         };
         assert_eq!(bytes.len(), size/8);
         Value {
-          abi: ethabi::ParamType::FixedBytes(bytes.len()), ty,
-          token: ethabi::Token::FixedBytes(bytes),
+          abi: ParamType::FixedBytes(bytes.len()), ty,
+          token: Token::FixedBytes(bytes),
         }
       },
       NumberSuffix::F(_) => {
         warn!("fixme: ieee");
         Value {
-          token: ethabi::Token::Int(I256::zero().into_raw()),
-          abi: ethabi::ParamType::Int(256), ty,
+          token: Token::Int(I256::zero().into_raw()),
+          abi: ParamType::Int(256), ty,
         }
       },
       _ => unreachable!(),
@@ -120,8 +120,8 @@ impl TryFrom<TypedString> for Value {
     if value.prefix.is_empty() {
       let string = String::from_utf8(value.value).map_err(|_| "utf8")?;
       return Ok(Value {
-        token: ethabi::Token::String(string),
-        abi: ethabi::ParamType::String, ty,
+        token: Token::String(string),
+        abi: ParamType::String, ty,
       })
     }
     let prefix = value.prefix;
@@ -143,8 +143,8 @@ impl TryFrom<TypedString> for Value {
       _ => return Err("unknown prefix"),
     };
     Ok(Value {
-      token: ethabi::Token::Bytes(bytes),
-      abi: ethabi::ParamType::Bytes, ty
+      token: Token::Bytes(bytes),
+      abi: ParamType::Bytes, ty
     })
   }
 }
@@ -232,15 +232,23 @@ pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, &'static str> {
     return Ok(value)
   }
   let mut value = match (ty, &value.abi) {
-    (Type::ContractType(_), ethabi::ParamType::Bytes) |
-    (Type::Contract(_), ethabi::ParamType::Address) |
-    (Type::Number(_), ethabi::ParamType::Int(_)) |
-    (Type::Number(_), ethabi::ParamType::Uint(_)) |
-    (Type::String(_), ethabi::ParamType::Bytes)
+    (Type::ContractType(_), ParamType::Bytes) |
+    (Type::Contract(_), ParamType::Address) |
+    (Type::Number(_), ParamType::Int(_)) |
+    (Type::Number(_), ParamType::Uint(_)) |
+    (Type::String(_), ParamType::Bytes)
       => {
         value
       },
-    (Type::Contract(_), ethabi::ParamType::Uint(_))
+    (Type::String(s), ParamType::Address) if s == "key"
+      => {
+        let address = match &value.token {
+          Token::Bytes(bytes) => LocalWallet::from_bytes(bytes).unwrap().address(),
+          _ => unreachable!(),
+        };
+        Value { token: Token::Address(address), abi: ParamType::Address, ty: None }
+      },
+    (Type::Contract(_), ParamType::Uint(_))
       => {
         let new_value: Address = match value.token {
           Token::Uint(i) | Token::Int(i) =>
@@ -292,7 +300,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
           };
           trace!("contract name {}", contract_name);
           let bytecode = match vm.values.get(&this) {
-            Some(Value { token: ethabi::Token::Bytes(bytes), ..}) => bytes,
+            Some(Value { token: Token::Bytes(bytes), ..}) => bytes,
             _ => anyhow::bail!("vm: contract bytecode not present"),
           };
           let result = deploy_contract(vm, contract_name, bytecode, &args)?;
@@ -378,7 +386,7 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   do_send_tx_sync(vm, tx)?;
   Ok(Value {
     token: Token::Uint(U256::zero()),
-    abi: ethabi::ParamType::Uint(256),
+    abi: ParamType::Uint(256),
     ty: None,
   })
 }
