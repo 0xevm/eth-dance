@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
+use crate::typing::Id;
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
 impl Display for Ident {
@@ -94,17 +95,25 @@ impl FromStr for Type {
   }
 }
 
+impl std::fmt::Display for Id {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "$${}", self.0)
+  }
+}
+
 impl std::fmt::Display for ExprCode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       ExprCode::None => write!(f, "()"),
       ExprCode::Func { func, this, args, send, .. } => {
+        let dot = if *send {":"} else {"."};
+        let args_str = args.iter().map(|i| format!("{}", i)).collect::<Vec<_>>().join(", ");
         match this {
-          Some(this) => f.write_str(&format!("{}{}{}@{:?}{:?}", func.ns, if *send {":"} else {"."}, func.name, this, args)),
-          None => f.write_str(&format!("{}{}{}{:?}", func.ns, if *send {":"} else {"."}, func.name, args)),
+          Some(this) => f.write_str(&format!("{}[{}]{}{}({})", func.ns, this, dot, func.name, args_str)),
+          None => f.write_str(&format!("{}{}{}({})", func.ns, dot, func.name, args_str)),
         }
       }
-      ExprCode::Expr(arg0) => write!(f, "{:?}", arg0),
+      ExprCode::Expr(arg0) => write!(f, "{}", arg0),
       ExprCode::String(arg0) => write!(f, "{}", arg0),
       ExprCode::Number(arg0) => write!(f, "{}", arg0),
     }
@@ -114,6 +123,10 @@ impl FromStr for ExprCode {
   type Err = &'static str;
 
   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-    todo!()
+    let result = match s {
+      "()" => ExprCode::None,
+      _ => unreachable!()
+    };
+    Ok(result)
   }
 }

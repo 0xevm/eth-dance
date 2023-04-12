@@ -48,6 +48,8 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
       anyhow::bail!("typing failed")
     }
   };
+  let ir = out::ir::to_ir(&state);
+  std::fs::write("ir.txt", ir.join("\n\n"))?;
 
   let mut vm = VM::new();
   let result = vm::execute(&mut vm, &state);
