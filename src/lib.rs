@@ -6,7 +6,7 @@ pub mod ast;
 pub mod typing;
 pub mod vm;
 pub mod out;
-pub mod serde_impl;
+pub mod convert;
 
 pub fn add(left: usize, right: usize) -> usize {
   left + right

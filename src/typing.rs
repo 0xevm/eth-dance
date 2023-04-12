@@ -78,54 +78,6 @@ pub enum Type {
   Number(NumberSuffix),
 }
 
-impl std::fmt::Display for Type {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Type::NoneType => write!(f, "NoneType"),
-      Type::Global(s) => write!(f, "@{}", s),
-      Type::ContractType(s) => write!(f, "ContractType({})", s),
-      Type::Contract(s) => write!(f, "Contract({})", s),
-      Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
-      Type::Abi(abi) => write!(f, "Abi({})", abi),
-      Type::String(s) if s.is_empty() => write!(f, "String"),
-      Type::String(s) => write!(f, "Custom({})", s),
-      Type::Number(s) => write!(f, "Number({})", s),
-    }
-  }
-}
-
-impl std::str::FromStr for Type {
-  type Err = &'static str;
-
-  fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-    let result = match s {
-      "NoneType" => Type::NoneType,
-      "String" => Type::String(String::new()),
-      _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
-      _ if s.contains("(") => {
-        let mut sp = s.splitn(2, "(");
-        let prefix = sp.next().unwrap();
-        let suffix = sp.next().unwrap();
-        let suffix = suffix.strip_suffix(")").unwrap_or(suffix);
-        match prefix {
-          "ContractType" => Type::ContractType(suffix.to_string()),
-          "Contract" => Type::Contract(suffix.to_string()),
-          "Function" => {
-            let a = suffix.splitn(2, ":").collect::<Vec<_>>();
-            Type::Function(a[0].to_string(), a[1].to_string())
-          }
-          "Abi" => Type::Abi(ethabi::param_type::Reader::read(suffix).map_err(|_| "abi parse")?),
-          "Custom" => Type::String(suffix.to_string()),
-          "Number" => Type::Number(suffix.parse().map_err(|_| "parse number suffix")?),
-          _ => return Err("unknown prefix"),
-        }
-      }
-      _ => return Err("unknown type")
-    };
-    Ok(result)
-  }
-}
-
 #[derive(Debug, Default)]
 pub enum ExprCode {
   #[default] None,
@@ -140,22 +92,6 @@ pub struct Expression {
   pub returns: Type,
   pub code: ExprCode,
   pub span: Span,
-}
-impl std::fmt::Display for ExprCode {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::None => write!(f, "()"),
-      Self::Func { func, this, args, send, .. } => {
-        match this {
-          Some(this) => f.write_str(&format!("{}{}{}@{:?}{:?}", func.ns, if *send {":"} else {"."}, func.name, this, args)),
-          None => f.write_str(&format!("{}{}{}{:?}", func.ns, if *send {":"} else {"."}, func.name, args)),
-        }
-      }
-      Self::Expr(arg0) => write!(f, "{:?}", arg0),
-      Self::String(arg0) => write!(f, "{}", arg0),
-      Self::Number(arg0) => write!(f, "{}", arg0),
-    }
-  }
 }
 
 #[derive(Debug, Default)]

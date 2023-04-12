@@ -122,12 +122,6 @@ pub struct Ident {
   pub name: String,
   pub span: Span,
 }
-impl std::fmt::Display for Ident {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    if self.dollar { f.write_str("$")? }
-    f.write_str(&self.name)
-  }
-}
 
 #[derive(Debug, Default)]
 pub struct ExprLit {
@@ -150,34 +144,6 @@ pub struct TypedNumber {
   pub span: Span,
 }
 
-impl std::fmt::Display for TypedString {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}{:?}", self.prefix, String::from_utf8_lossy(&self.value))
-  }
-}
-
-impl std::fmt::Display for TypedNumber {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}{}", self.value, self.suffix)
-  }
-}
-
-impl std::fmt::Display for NumberSuffix {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let u = if self.is_unsigned() { "u" } else { "" };
-    match self {
-      NumberSuffix::None => write!(f, ""),
-      NumberSuffix::Signed => write!(f, "i"),
-      NumberSuffix::Q(_, i) => write!(f, "{}q{}", u, i),
-      NumberSuffix::F(i) => write!(f, "f{}{}", i, u),
-
-      NumberSuffix::E(true, 18) => write!(f, "eth"),
-      NumberSuffix::E(true, 9) => write!(f, "gwei"),
-      NumberSuffix::E(_, i) => write!(f, "e{}{}", i, u),
-    }
-  }
-}
-
 impl NumberSuffix {
   pub fn is_unsigned(self) -> bool {
     match self {
@@ -186,14 +152,6 @@ impl NumberSuffix {
       NumberSuffix::E(b, _) | NumberSuffix::Q(b, _)
         => b
     }
-  }
-}
-
-impl std::str::FromStr for NumberSuffix {
-  type Err = Error;
-
-  fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-    parse_number_suffix(s, Span::default())
   }
 }
 
@@ -471,7 +429,7 @@ fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
   Ok(result)
 }
 
-fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
+pub(crate) fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix> {
   match str {
     "" => return Ok(NumberSuffix::None),
     "i" => return Ok(NumberSuffix::Signed),

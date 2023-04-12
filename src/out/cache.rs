@@ -8,7 +8,7 @@ use ethabi::{
 use serde::{Serialize, Deserialize};
 
 use crate::{
-  serde_impl,
+  convert::serde as serde_impl,
   typing::{Type, Typing},
   vm::VM,
 };
@@ -87,6 +87,7 @@ pub struct Item {
   pub value_hash: H256,
   #[serde_as(as = "serde_with::DisplayFromStr")]
   pub ty: Type,
+  // pub code: ExprCode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
