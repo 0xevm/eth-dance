@@ -16,11 +16,13 @@ struct Opts {
   verbose: u8,
   #[arg(short, long)]
   workdir: Option<String>,
+  #[arg(short, long, default_value = "out")]
+  out: String,
   filename: String,
 }
 
-fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
-  let input = std::fs::read_to_string(path.as_ref())?;
+fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
+  let input = std::fs::read_to_string(&opts.filename)?;
   let result = match ast::parse(&input) {
     Ok(result) => result,
     Err(e) => {
@@ -32,7 +34,7 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
     }
   };
   result.iter().for_each(|i| trace!("{:?}", i));
-  let mut state = Typing::new(path.as_ref().to_path_buf(), workdir.as_ref().to_path_buf());
+  let mut state = Typing::new(Path::new(&opts.filename).to_path_buf(), workdir.as_ref().to_path_buf());
 
   let result = typing::parse_file(&mut state, &result);
   for (id, info) in &state.infos {
@@ -49,7 +51,8 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
     }
   };
   let ir = out::ir::to_ir(&state);
-  std::fs::write("ir.txt", ir.join("\n\n"))?;
+  std::fs::create_dir_all(&opts.out)?;
+  std::fs::write(format!("{}/ir.txt", opts.out), ir.join("\n\n"))?;
 
   let mut vm = VM::new();
   let result = vm::execute(&mut vm, &state);
@@ -76,7 +79,11 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
     info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
   }
   let cache = out::cache::from_vm(&vm, &state);
-  std::fs::write("cache.json", serde_json::to_string_pretty(&cache)?)?;
+  std::fs::write(format!("{}/cache.toml", opts.out), toml::to_string_pretty(&cache)?)?;
+
+  let cache: out::cache::Output = toml::from_str(&std::fs::read_to_string(format!("{}/cache.toml", opts.out))?)?;
+  let contracts = out::contract::gen(&cache.vars);
+  std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
   Ok(())
 }
 
@@ -105,6 +112,6 @@ fn main() -> Result<()> {
       current_dir.to_path_buf()
     }
   };
-  run(&opts.filename, workdir)?;
+  run(workdir, &opts).unwrap();
   Ok(())
 }

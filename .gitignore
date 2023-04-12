@@ -6,3 +6,5 @@
 # output
 cache.json
 ir.txt
+cache.toml
+contracts.json

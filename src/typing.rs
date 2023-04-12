@@ -94,8 +94,7 @@ impl Type {
         "address" => ethabi::ParamType::Address,
         "key" | "hex" => ethabi::ParamType::Bytes,
         _ => {
-          warn!("fixme: type(string) abi {}", s);
-          ethabi::ParamType::Bytes
+          unreachable!("fixme: type(string) abi {}", s)
         }
       },
       Type::Number(i) => match i {

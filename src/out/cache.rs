@@ -92,12 +92,14 @@ pub struct Item {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Output {
+  pub last_id: u64,
   pub vars: BTreeMap<String, Item>,
-  pub ids: BTreeMap<u64, Item>,
+  pub ids: Vec<Option<Item>>,
 }
 
 pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
   let mut out = Output::default();
+  let mut ids_cache = BTreeMap::new();
   for (id, value) in &vm.values {
     let name = match typing.get_info_view(*id).display.clone() {
       s if s.starts_with("$$") => None,
@@ -118,7 +120,16 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
       out.vars.insert(name, item.clone());
       item.value = None;
     }
-    out.ids.insert(id, item);
+    ids_cache.insert(id, item);
+    if id > out.last_id {
+      out.last_id = id;
+    }
+  }
+  for (_id, item) in ids_cache {
+    // while out.ids.len() + 1 < id as usize {
+    //   out.ids.push(None)
+    // }
+    out.ids.push(Some(item))
   }
   out
 }
