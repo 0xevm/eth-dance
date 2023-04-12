@@ -73,8 +73,8 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
     }
     info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
   }
-  let output = out::from_vm(&vm, &state);
-  std::fs::write("out.json", serde_json::to_string_pretty(&output)?)?;
+  let cache = out::cache::from_vm(&vm, &state);
+  std::fs::write("cache.json", serde_json::to_string_pretty(&cache)?)?;
   Ok(())
 }
 
