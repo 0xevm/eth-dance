@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, rc::Rc, path::{Path, PathBuf}};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
@@ -73,9 +75,36 @@ pub enum Type {
   ContractType(String),
   Contract(String),
   Function(String, String),
-  Abi(ethabi::param_type::ParamType),
+  Abi(ethabi::ParamType),
   String(StringPrefix), // the prefix
   Number(NumberSuffix),
+}
+
+impl Type {
+  pub fn abi(&self) -> Option<ethabi::ParamType> {
+    Some(match self {
+      Type::NoneType => ethabi::ParamType::FixedBytes(0),
+      Type::Global(_) => return None,
+      Type::ContractType(_) => ethabi::ParamType::Bytes,
+      Type::Contract(_) => ethabi::ParamType::Address,
+      Type::Function(_, _) => return None,
+      Type::Abi(i) => i.clone(),
+      Type::String(s) => match s.as_str() {
+        "" => ethabi::ParamType::String,
+        "address" => ethabi::ParamType::Address,
+        "key" | "hex" => ethabi::ParamType::Bytes,
+        _ => {
+          warn!("fixme: type(string) abi {}", s);
+          ethabi::ParamType::Bytes
+        }
+      },
+      Type::Number(i) => match i {
+        NumberSuffix::F(size) => ethabi::ParamType::FixedBytes(*size / 8),
+        _ if i.is_unsigned() => ethabi::ParamType::Uint(256),
+        _ => ethabi::ParamType::Int(256),
+      },
+    })
+  }
 }
 
 #[derive(Debug, Default)]
