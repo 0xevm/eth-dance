@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, rc::Rc};
 pub use anyhow::Result;
 pub use ethabi::Contract as ContractAbi;
 pub use ethabi::Function as FunctionAbi;
+pub use ethabi::Constructor as ConstructorAbi;
 use ethabi::{ParamType, Token};
 
 use crate::typing::Type;
@@ -44,6 +45,20 @@ impl Scope {
         }))
       }
     }
+    let ctor_inputs = if let Some(ConstructorAbi { inputs }) = &abi.constructor {
+      inputs.clone()
+    } else {
+      vec![]
+    };
+    funcs.entry("constructor".to_string()).or_default().push(Rc::new(FuncImpl {
+      ns: name.to_string(),
+      name: "constructor".to_string(),
+      abi: None,
+      signature: String::new(),
+      selector: Default::default(),
+      input_types: ctor_inputs.iter().map(|i| i.kind.clone()).collect(),
+      output_types: vec![ParamType::Address],
+    }));
     Self { name: name.to_string(), abi: Some(abi), bytecode, funcs }
   }
 

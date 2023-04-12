@@ -289,14 +289,11 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     },
     ExprKind::Funccall(i) => {
       let code = parse_func(state, i)?;
-      if let ExprCode::Func { func, this, .. } = &code {
-        if func.ns == "@Global" && func.name == "deploy" {
-          result.returns = match state.get_info(this.unwrap()).ty() {
-            Type::ContractType(i) => Type::Contract(i.to_string()),
-            t => return Err(Error::ScopeNotContract(t.clone(), span.clone())),
-          };
+      if let ExprCode::Func { func, .. } = &code {
+        result.returns = if func.name == "constructor" {
+          Type::Contract(func.ns.clone())
         } else {
-          result.returns = func.returns();
+          func.returns()
         }
       } else {
         unreachable!()
@@ -356,28 +353,33 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
 
   let name = i.name.to_string();
   let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
-  if scope_str == "@Global" && name == "deploy" {
+  let (scope_str, name) = if scope_str == "@Global" && name == "deploy" {
     if args.is_empty() {
       return Err(Error::InferTypeFailed(scope_str, "deploy:this".to_string(), i.span.clone()))
     }
-    this = match args.remove(0).code {
+    let this_arg = args.remove(0);
+    this = match this_arg.code {
       ExprCode::Expr(i) => Some(i),
-      _ => todo!()
+      _ => todo!(),
     };
-  }
+    let scope_str = match this_arg.returns {
+      Type::ContractType(i) => i,
+      _ => todo!(),
+    };
+    trace!("deploy: this = {:?} {}", this, scope_str);
+    (scope_str, "constructor".to_string())
+  } else {
+    (scope_str, name)
+  };
   let mut arg_ids = Vec::new();
   let mut arg_types = Vec::new();
   for arg in args {
     arg_types.push(arg.returns.clone());
     arg_ids.push(state.insert_expr(arg));
   }
-  let func = if scope_str == "@Global" && name == "deploy" {
-    state.contracts.get(&scope_str).and_then(|i| i.funcs.get(&name)).map(|i| i[0].clone()).unwrap()
-  } else {
-    match state.contracts.get(&scope_str).and_then(|i| i.select(&name, &arg_types)) {
-      Some(func) => func,
-      None => return Err(Error::InferTypeFailed(scope_str, name, i.span.clone()))
-    }
+  let func = match state.contracts.get(&scope_str).and_then(|i| i.select(&name, &arg_types)) {
+    Some(func) => func,
+    None => return Err(Error::InferTypeFailed(scope_str, name, i.span.clone()))
   };
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));

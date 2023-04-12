@@ -108,7 +108,16 @@ impl VM {
 }
 
 impl ExprCode {
-  pub fn show(&self, vm: &VM) -> String {
+  pub fn show(&self) -> String {
+    const MAX_LEN: usize = 500;
+    let code_str = self.to_string();
+    if code_str.len() > MAX_LEN {
+      code_str[..MAX_LEN].to_string() + "..."
+    } else {
+      code_str.to_string()
+    }
+  }
+  pub fn show_var(&self, vm: &VM) -> String {
     const MAX_LEN: usize = 500;
     let expand = |c: &regex::Captures| -> String {
       let id = Id(c.get(1).unwrap().as_str().parse::<u64>().unwrap());
@@ -130,7 +139,7 @@ impl ExprCode {
 
 pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   for (id, info) in &typing.infos {
-    debug!("code: {} <- {}", id, info.expr.code.show(vm));
+    debug!("code: {} <- {}", id, info.expr.code.show_var(vm));
     match &info.expr.code {
       ExprCode::None => {
         warn!("expr is none: {:?}", id)
@@ -145,20 +154,14 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
       }
       ExprCode::Func { func, this, args, send } => {
         let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
-        if func.ns == "@Global" && func.name == "deploy" && *send {
+        if func.name == "constructor" && *send {
           let this = this.unwrap();
-          let contract_name = match typing.get_info_view(this).ty() {
-            Type::ContractType(name) => name,
-            t => {
-              anyhow::bail!("vm: deploy args not contract {:?}", t)
-            }
-          };
-          trace!("contract name {}", contract_name);
+          trace!("contract name {}", &func.ns);
           let bytecode = match vm.values.get(&this) {
             Some(Value { token: Token::Bytes(bytes), ..}) => bytes,
             _ => anyhow::bail!("vm: contract bytecode not present"),
           };
-          let result = deploy_contract(vm, contract_name, bytecode, &args)?;
+          let result = deploy_contract(vm, &func.ns, bytecode, &args)?;
           vm.set_value(*id, info, result.unwrap().into())?;
         } else if !func.ns.starts_with("@/") {
           let result = call_global(vm, func.clone(), &args)?;

@@ -38,7 +38,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
 
   let result = typing::parse_file(&mut state, &result);
   for (id, info) in &state.infos {
-    debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.code);
+    debug!("{:?}{}: [{:?}<={:?}] {}", id, info.display, info.should, info.expr.returns, info.expr.code.show());
   }
   match result {
     Ok(result) => result,
