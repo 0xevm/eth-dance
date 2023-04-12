@@ -31,7 +31,7 @@ fn run<P1: AsRef<Path>, P2: AsRef<Path>>(path: P1, workdir: P2) -> Result<()> {
       anyhow::bail!("parse failed")
     }
   };
-  result.iter().for_each(|i| info!("{:?}", i));
+  result.iter().for_each(|i| trace!("{:?}", i));
   let mut state = Typing::new(path.as_ref().to_path_buf(), workdir.as_ref().to_path_buf());
 
   let result = typing::parse_file(&mut state, &result);
