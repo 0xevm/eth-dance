@@ -136,7 +136,7 @@ pub struct ExprLit {
   pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NumberSuffix {
   #[default] None, Signed, Q(bool, usize), F(usize), E(bool, usize),
 }

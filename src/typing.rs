@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, rc::Rc, path::{Path, PathBuf}};
 
 use crate::{
+  serde_impl,
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Scope, Func, globals, load_abi},
 };
@@ -66,14 +67,15 @@ impl Error {
   }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[serde_with::serde_as]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Type {
   #[default] NoneType,
   Global(String),
   ContractType(String),
   Contract(String),
   Function(String, String),
-  Abi(ethabi::param_type::ParamType),
+  Abi(#[serde_as(as = "serde_impl::ParamType")] ethabi::param_type::ParamType),
   String(StringPrefix), // the prefix
   Number(NumberSuffix),
 }
@@ -126,7 +128,7 @@ impl Info {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Id(u64);
+pub struct Id(pub u64);
 pub struct Typing {
   pub current_file: PathBuf,
   pub working_dir: PathBuf,
