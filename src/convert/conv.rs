@@ -1,27 +1,49 @@
-use std::string::FromUtf8Error;
+use std::{string::FromUtf8Error, num::ParseFloatError};
 
 use ethers::types::{I256, U256, H256};
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
-  #[error("connot convert from {src} to {dst}")]
-  NotCompatible { src: String, dst: String },
+pub enum ErrorKind {
+  #[error("connot convert from {0}")]
+  NotCompatible(String),
   #[error("load utf8 {0}")]
   FromUtf8(#[from] FromUtf8Error),
+  #[error("parse float {0}")]
+  ParseFloat(#[from] ParseFloatError),
   #[error("trim uint to {0}")]
-  TrimUint(usize),
+  OutOfBounds(usize),
   #[error("unknown prefix {0}")]
   UnknownPrefix(String),
   #[error("custom error {0}")]
   Custom(String),
 }
 
-impl Error {
+#[derive(Debug, thiserror::Error)]
+#[error("convert {dst}")]
+pub struct Error {
+  #[source]
+  pub kind: ErrorKind,
+  pub dst: &'static str,
+}
+
+impl ErrorKind {
   pub fn custom<S: ToString>(s: S) -> Self {
-    Error::Custom(s.to_string())
+    ErrorKind::Custom(s.to_string())
   }
   pub fn custom_error<E: std::error::Error>(s: E) -> Self {
-    Error::Custom(format!("{:?}", s))
+    ErrorKind::Custom(format!("{:?}", s))
+  }
+  pub fn when(self, dst: &'static str) -> Error {
+    Error { kind: self, dst }
+  }
+}
+
+pub trait ErrorKindExt<T> {
+  fn when(self, s: &'static str) -> Result<T, Error>;
+}
+impl<T> ErrorKindExt<T> for Result<T, ErrorKind> {
+  fn when(self, dst: &'static str) -> Result<T, Error> {
+    self.map_err(|kind| kind.when(dst))
   }
 }
 
@@ -30,7 +52,7 @@ pub fn try_convert_hex_to_bytes(mut input: &[u8]) -> Result<Vec<u8>, Error> {
   if input.starts_with("0x".as_bytes()) {
     input = &input[2..];
   }
-  let result = hex::decode(input).map_err(Error::custom_error)?;
+  let result = hex::decode(input).map_err(ErrorKind::custom_error).when("hex_to_bytes")?;
   Ok(result)
 }
 
@@ -42,17 +64,17 @@ pub fn try_convert_u256_to_h256(i: U256) -> H256 {
 
 pub fn try_trim_u256(i: U256, n: usize) -> Result<U256, Error> {
   if i >= U256::from(2).pow(U256::from(n)) {
-    return Err(Error::TrimUint(n))
+    return Err(ErrorKind::OutOfBounds(n)).when("trim_u256")
   }
   Ok(i)
 }
 
 pub fn try_trim_i256(i: I256, n: usize) -> Result<I256, Error> {
   if i >= I256::from(2).pow(n as _) {
-    return Err(Error::TrimUint(n))
+    return Err(ErrorKind::OutOfBounds(n)).when("trim_i256")
   }
   if i < -I256::from(2).pow(n as _) {
-    return Err(Error::TrimUint(n))
+    return Err(ErrorKind::OutOfBounds(n)).when("trim_i256")
   }
   Ok(i)
 }

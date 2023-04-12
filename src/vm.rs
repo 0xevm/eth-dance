@@ -59,12 +59,7 @@ impl VM {
         }
         _ => unreachable!()
       }
-      "$confirm_interval" => match &value.token {
-        Token::Uint(i) => {
-          self.confirm_interval = Some(i.as_u64() as _)
-        }
-        _ => unreachable!()
-      }
+      "$confirm_interval" => self.confirm_interval = Some(value.try_into().unwrap()),
       _ => warn!("unknown builtin name {}", name)
     };
     self.builtin.insert(name.to_string(), value.clone());

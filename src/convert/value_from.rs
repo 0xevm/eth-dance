@@ -10,7 +10,7 @@ use crate::{
   typing::Type,
 };
 
-use super::{conv::try_convert_hex_to_bytes, Error};
+use super::{conv::{try_convert_hex_to_bytes, ErrorKindExt, ErrorKind}, Error};
 
 impl From<Address> for Value {
   fn from(value: Address) -> Self {
@@ -107,7 +107,7 @@ impl TryFrom<TypedString> for Value {
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
     let ty = Some(Type::String(value.prefix.clone()));
     if value.prefix.is_empty() {
-      let string = String::from_utf8(value.value)?;
+      let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
       return Ok(Value {
         token: Token::String(string),
         abi: ParamType::String, ty,
@@ -129,7 +129,7 @@ impl TryFrom<TypedString> for Value {
       "b" => {
         value.value
       }
-      _ => return Err(Error::UnknownPrefix(prefix)),
+      _ => return Err(ErrorKind::UnknownPrefix(prefix)).when("try_from"),
     };
     Ok(Value {
       token: Token::Bytes(bytes),
