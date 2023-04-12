@@ -14,6 +14,8 @@ pub enum Error {
   Mismatch { require: Rule, found: Rule, span: Span, at: Rule },
   #[error("{at:?}:{span:?}: require {require:?} value error: {value:?}")]
   Value { require: Rule, value: String, span: Span, at: Rule },
+  #[error("{2:?}:{1:?}: unknown {0:?}")]
+  Unknown(String, Rule, Rule),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -155,7 +157,16 @@ impl NumberSuffix {
   }
 }
 
-pub type StringPrefix = String;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StringPrefix {
+  #[default] None, Byte, Hex, Key, Address, Contract,
+}
+
+impl StringPrefix {
+  pub fn is_empty(self) -> bool {
+    self == StringPrefix::None
+  }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TypedString {
@@ -374,7 +385,8 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
   let mut pairs = pair.into_inner();
   let mut result = TypedString::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
-    result.prefix = parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string()
+    let prefix = parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string();
+    result.prefix = prefix.parse().map_err(|_| Error::Unknown(prefix.clone(), Rule::ident, Rule::string))?;
   }
   for pair in pairs {
     let s = pair.as_str();

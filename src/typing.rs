@@ -89,13 +89,14 @@ impl Type {
       Type::Contract(_) => ethabi::ParamType::Address,
       Type::Function(_, _) => return None,
       Type::Abi(i) => i.clone(),
-      Type::String(s) => match s.as_str() {
-        "" => ethabi::ParamType::String,
-        "address" => ethabi::ParamType::Address,
-        "key" | "hex" => ethabi::ParamType::Bytes,
-        _ => {
-          unreachable!("fixme: type(string) abi {}", s)
-        }
+      Type::String(s) => match s {
+        StringPrefix::None => ethabi::ParamType::String,
+        StringPrefix::Address => ethabi::ParamType::Address,
+        StringPrefix::Byte | StringPrefix::Key | StringPrefix::Hex => ethabi::ParamType::Bytes,
+        StringPrefix::Contract => todo!(),
+        // _ => {
+        //   unreachable!("fixme: type(string) abi {}", s)
+        // }
       },
       Type::Number(i) => match i {
         NumberSuffix::F(size) => ethabi::ParamType::FixedBytes(*size / 8),
@@ -171,8 +172,8 @@ impl Typing {
     self.get_info(id).display = contract.name.to_string();
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
-      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: "hex".to_string(), value: bytecode.to_string().into(), span: Span::default() });
-      self.get_info(id).expr.returns = Type::String("hex".to_string())
+      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Hex, value: bytecode.to_string().into(), span: Span::default() });
+      self.get_info(id).expr.returns = Type::String(StringPrefix::Hex)
     }
     self.contracts.insert(contract.name.to_string(), contract);
     id
@@ -300,7 +301,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       }
       result.code = code;
     },
-    ExprKind::String(i) if i.prefix == "contract" => {
+    ExprKind::String(i) if i.prefix == StringPrefix::Contract => {
       let path = String::from_utf8(i.value.clone()).unwrap();
       let real_path = if path.starts_with(".") {
         warn!("fixme: resolve path related to work");

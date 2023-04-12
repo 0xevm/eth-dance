@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
+use crate::ast::StringPrefix;
 use crate::typing::Id;
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
@@ -20,6 +21,42 @@ impl Display for TypedString {
 impl Display for TypedNumber {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     write!(f, "{}{}", self.value, self.suffix)
+  }
+}
+
+impl StringPrefix {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      StringPrefix::None => "",
+      StringPrefix::Byte => "b",
+      StringPrefix::Address => "address",
+      StringPrefix::Contract => "contract",
+      StringPrefix::Hex => "hex",
+      StringPrefix::Key => "key",
+    }
+  }
+}
+
+impl Display for StringPrefix {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "{}", self.as_str())
+  }
+}
+
+impl FromStr for StringPrefix {
+  type Err = &'static str;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    let result = match s {
+      "" => StringPrefix::None,
+      "byte" | "b" => StringPrefix::Byte,
+      "address" => StringPrefix::Address,
+      "contract" => StringPrefix::Contract,
+      "hex" => StringPrefix::Hex,
+      "key" => StringPrefix::Key,
+      _ => return Err("unknown prefix"),
+    };
+    Ok(result)
   }
 }
 
@@ -69,7 +106,7 @@ impl FromStr for Type {
   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
     let result = match s {
       "NoneType" => Type::NoneType,
-      "String" => Type::String(String::new()),
+      "String" => Type::String(StringPrefix::None),
       _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
       _ if s.contains("(") => {
         let mut sp = s.splitn(2, "(");
@@ -84,7 +121,7 @@ impl FromStr for Type {
             Type::Function(a[0].to_string(), a[1].to_string())
           }
           "Abi" => Type::Abi(ethabi::param_type::Reader::read(suffix).map_err(|_| "abi parse")?),
-          "Custom" => Type::String(suffix.to_string()),
+          "Custom" => Type::String(suffix.parse()?),
           "Number" => Type::Number(suffix.parse().map_err(|_| "parse number suffix")?),
           _ => return Err("unknown prefix"),
         }

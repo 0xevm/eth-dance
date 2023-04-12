@@ -11,14 +11,25 @@ use ethers::{
   types::I256,
 };
 
-use crate::{typing::Type, vm::Value};
+use crate::{typing::Type, vm::Value, ast::StringPrefix};
 
 use self::conv::{try_convert_u256_to_h256, try_trim_u256, try_trim_i256};
 
-pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, Error> {
+pub fn try_convert(ty: &Type, value: Value) -> Result<Value, Error> {
   if Some(ty) == value.ty.as_ref() {
     return Ok(value)
   }
+  let mut value = match (ty, &value.ty) {
+    (Type::String(StringPrefix::Address), Some(Type::String(StringPrefix::Key))) |
+    (Type::Abi(ParamType::Address), Some(Type::String(StringPrefix::Key))) => {
+      let address = match &value.token {
+        Token::Bytes(bytes) => LocalWallet::from_bytes(bytes).unwrap().address(),
+        _ => unreachable!(),
+      };
+      Value { token: Token::Address(address), abi: ParamType::Address, ty: None }
+    }
+    _ => value
+  };
   if let Some(abi) = ty.abi() {
     if abi == value.abi {
       value.ty = Some(ty.clone());
@@ -34,14 +45,6 @@ pub fn try_convert(ty: &Type, mut value: Value) -> Result<Value, Error> {
     //   => {
     //     value
     //   },
-    (Type::String(s), ParamType::Bytes) if s == "key"
-      => {
-        let address = match &value.token {
-          Token::Bytes(bytes) => LocalWallet::from_bytes(bytes).unwrap().address(),
-          _ => unreachable!(),
-        };
-        Value { token: Token::Address(address), abi: ParamType::Address, ty: None }
-      },
     (Type::Contract(_), ParamType::Uint(256))
       => {
         let new_value: Address = match value.token {

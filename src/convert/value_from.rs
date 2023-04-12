@@ -6,7 +6,7 @@ use ethers::types::{U256, I256};
 
 use crate::{
   vm::Value,
-  ast::{TypedNumber, NumberSuffix, TypedString},
+  ast::{TypedNumber, NumberSuffix, TypedString, StringPrefix},
   typing::Type,
 };
 
@@ -106,30 +106,31 @@ impl TryFrom<TypedString> for Value {
 
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
     let ty = Some(Type::String(value.prefix.clone()));
-    if value.prefix.is_empty() {
-      let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
-      return Ok(Value {
-        token: Token::String(string),
-        abi: ParamType::String, ty,
-      })
-    }
-    let prefix = value.prefix;
-    let bytes = match prefix.as_str() {
-      "hex" | "key" => {
+
+    let bytes = match value.prefix {
+      StringPrefix::None => {
+        let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
+        return Ok(Value {
+          token: Token::String(string),
+          abi: ParamType::String, ty,
+        })
+      },
+      StringPrefix::Hex | StringPrefix::Key => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
         try_convert_hex_to_bytes(value.value.as_slice())?
       }
-      "address" => {
+      StringPrefix::Address => {
         let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
         return Ok(Value {
           token: Token::Address(Address::from_slice(&addr)),
           abi: ParamType::Address, ty,
         })
       }
-      "b" => {
+      StringPrefix::Byte => {
         value.value
       }
-      _ => return Err(ErrorKind::UnknownPrefix(prefix)).when("try_from"),
+      StringPrefix::Contract => todo!(),
+      // _ => return Err(ErrorKind::UnknownPrefix(value.prefix.to_string())).when("try_from"),
     };
     Ok(Value {
       token: Token::Bytes(bytes),
