@@ -19,11 +19,37 @@ use crate::{
 // pub type Result<T, E=Error> = std::result::Result<T, E>;
 pub use anyhow::Result;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Value {
   pub token: Token,
   pub abi: ParamType,
   pub ty: Option<Type>,
+}
+
+impl std::fmt::Debug for Value {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    const MAX_LEN: usize = 64;
+    let s = self.token.to_string();
+    let s = if s.len() > MAX_LEN {
+      format!("[{}]{}...", s.len(), s[..MAX_LEN].to_string())
+    } else { s };
+    f.debug_struct("Value").field("token", &s).field("abi", &self.abi).field("ty", &self.ty).finish()
+  }
+}
+
+impl Value {
+  pub fn show(&self) -> String {
+    const MAX_LEN: usize = 64;
+    let s = self.token.to_string();
+    if s.len() > MAX_LEN {
+      match &self.ty {
+        Some(ty) => format!("{}...: {}", &s[..MAX_LEN/2], ty),
+        None => format!("{}...", &s[..MAX_LEN]),
+      }
+    } else {
+      s
+    }
+  }
 }
 
 pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
@@ -65,7 +91,7 @@ impl VM {
     self.builtin.insert(name.to_string(), value.clone());
   }
   pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
-    trace!("set_value: {:?} = {}", id, value.token);
+    trace!("set_value: {} = {}", id, value.show());
     let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
       self.set_builtin(&info.display, &value);
@@ -81,8 +107,30 @@ impl VM {
   }
 }
 
+impl ExprCode {
+  pub fn show(&self, vm: &VM) -> String {
+    const MAX_LEN: usize = 500;
+    let expand = |c: &regex::Captures| -> String {
+      let id = Id(c.get(1).unwrap().as_str().parse::<u64>().unwrap());
+      match vm.values.get(&id) {
+        Some(a) => a.show(),
+        None => format!("~{}~", id),
+      }
+    };
+    let re = regex::Regex::new(r"\$\$(\d+)").unwrap();
+    let code_str = self.to_string();
+    let code_str = re.replace(&code_str, expand);
+    if code_str.len() > MAX_LEN {
+      code_str[..MAX_LEN].to_string() + "..."
+    } else {
+      code_str.to_string()
+    }
+  }
+}
+
 pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   for (id, info) in &typing.infos {
+    debug!("code: {} <- {}", id, info.expr.code.show(vm));
     match &info.expr.code {
       ExprCode::None => {
         warn!("expr is none: {:?}", id)
@@ -203,7 +251,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
-  debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
+  debug!("call_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   let bytes = do_call_tx_sync(vm, tx)?;
   let out = ethabi::decode(&func.output_types, &bytes)?;
