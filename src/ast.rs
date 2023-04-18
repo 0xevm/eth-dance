@@ -132,6 +132,18 @@ pub struct ExprLit {
   pub span: Span,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ExprListKind {
+  #[default] Raw, FixedArray,
+}
+
+#[derive(Debug, Default)]
+pub struct ExprList {
+  pub exprs: Vec<ExprLit>,
+  pub kind: ExprListKind,
+  pub span: Span,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NumberSuffix {
   #[default] None, Signed, Q(bool, usize), F(usize), E(bool, usize),
@@ -194,6 +206,7 @@ pub enum ExprKind {
   Funccall(Box<Funccall>),
   String(TypedString),
   Number(TypedNumber),
+  List(ExprList),
 }
 
 #[derive(Debug, Default)]
@@ -278,12 +291,29 @@ fn parse_expr_inner(pair: Pair<Rule>) -> Result<ExprKind> {
   let span = pair.as_span().into();
   let expr = match pair.as_rule() {
     Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
+    Rule::fixed_array => parse_array(pair).map(ExprKind::List)?,
     Rule::string => parse_string(pair).map(ExprKind::String)?,
     Rule::number => parse_number(pair).map(ExprKind::Number)?,
     Rule::ident => parse_ident(pair).map(ExprKind::Ident)?,
     rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
   };
   Ok(expr)
+}
+
+// fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
+fn parse_array(pair: Pair<Rule>) -> Result<ExprList> {
+  assert_eq!(pair.as_rule(), Rule::fixed_array);
+  let span: Span = pair.as_span().into();
+  let pairs = pair.into_inner();
+  let mut exprs = Vec::new();
+  for pair in pairs {
+    assert_eq!(pair.as_rule(), Rule::expr);
+    exprs.push(parse_expr(pair))
+  }
+  let exprs = drain_error(exprs).map_err(|e| Error::Errors(e, span.clone(), Rule::fixed_array))?;
+  Ok(ExprList {
+    span, exprs, kind: ExprListKind::FixedArray,
+  })
 }
 
 // funccall = { item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }

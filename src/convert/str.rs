@@ -54,7 +54,7 @@ impl FromStr for StringPrefix {
       "contract" => StringPrefix::Contract,
       "hex" => StringPrefix::Hex,
       "key" => StringPrefix::Key,
-      _ => return Err("unknown prefix"),
+      _ => return Err("unknown string prefix"),
     };
     Ok(result)
   }
@@ -91,11 +91,12 @@ impl Display for Type {
       Type::Global(s) => write!(f, "@{}", s),
       Type::ContractType(s) => write!(f, "ContractType({})", s),
       Type::Contract(s) => write!(f, "Contract({})", s),
-      Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
+      // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
       Type::Abi(abi) => write!(f, "Abi({})", abi),
       Type::String(s) if s.is_empty() => write!(f, "String"),
       Type::String(s) => write!(f, "Custom({})", s),
       Type::Number(s) => write!(f, "Number({})", s),
+      Type::FixedArray(t, n) => write!(f, "FixedArray({},{})", t, n),
     }
   }
 }
@@ -116,14 +117,24 @@ impl FromStr for Type {
         match prefix {
           "ContractType" => Type::ContractType(suffix.to_string()),
           "Contract" => Type::Contract(suffix.to_string()),
-          "Function" => {
-            let a = suffix.splitn(2, ":").collect::<Vec<_>>();
-            Type::Function(a[0].to_string(), a[1].to_string())
-          }
+          // "Function" => {
+          //   let a = suffix.splitn(2, ":").collect::<Vec<_>>();
+          //   Type::Function(a[0].to_string(), a[1].to_string())
+          // }
           "Abi" => Type::Abi(ethabi::param_type::Reader::read(suffix).map_err(|_| "abi parse")?),
           "Custom" => Type::String(suffix.parse()?),
           "Number" => Type::Number(suffix.parse().map_err(|_| "parse number suffix")?),
-          _ => return Err("unknown prefix"),
+          "FixedArray" => {
+            let a = suffix.rsplitn(2, ",").collect::<Vec<_>>();
+            if a.len() != 2 {
+              return Err("parse fixed_array args len")
+            }
+            Type::FixedArray(
+              Box::new(a[1].parse().map_err(|_| "parse fixed_array inner type")?),
+              a[0].parse().map_err(|_| "parse fixed_array count")?,
+            )
+          }
+          _ => return Err("unknown type prefix"),
         }
       }
       _ => return Err("unknown type")
@@ -153,17 +164,21 @@ impl std::fmt::Display for ExprCode {
       ExprCode::Expr(arg0) => write!(f, "{}", arg0),
       ExprCode::String(arg0) => write!(f, "{}", arg0),
       ExprCode::Number(arg0) => write!(f, "{}", arg0),
+      ExprCode::List(arg0) => {
+        let s = arg0.iter().map(ToString::to_string).collect::<Vec<_>>();
+        write!(f, "[{}]", s.join(","))
+      },
     }
   }
 }
-impl FromStr for ExprCode {
-  type Err = &'static str;
+// impl FromStr for ExprCode {
+//   type Err = &'static str;
 
-  fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-    let result = match s {
-      "()" => ExprCode::None,
-      _ => unreachable!()
-    };
-    Ok(result)
-  }
-}
+//   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+//     let result = match s {
+//       "()" => ExprCode::None,
+//       _ => unreachable!()
+//     };
+//     Ok(result)
+//   }
+// }

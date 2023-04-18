@@ -74,10 +74,11 @@ pub enum Type {
   Global(String),
   ContractType(String),
   Contract(String),
-  Function(String, String),
+  // Function(String, String),
   Abi(ethabi::ParamType),
   String(StringPrefix), // the prefix
   Number(NumberSuffix),
+  FixedArray(Box<Type>, usize),
 }
 
 impl Type {
@@ -87,7 +88,7 @@ impl Type {
       Type::Global(_) => return None,
       Type::ContractType(_) => ethabi::ParamType::Bytes,
       Type::Contract(_) => ethabi::ParamType::Address,
-      Type::Function(_, _) => return None,
+      // Type::Function(_, _) => return None,
       Type::Abi(i) => i.clone(),
       Type::String(s) => match s {
         StringPrefix::None => ethabi::ParamType::String,
@@ -103,6 +104,9 @@ impl Type {
         _ if i.is_unsigned() => ethabi::ParamType::Uint(256),
         _ => ethabi::ParamType::Int(256),
       },
+      Type::FixedArray(i, n) => {
+        ethabi::ParamType::FixedArray(Box::new(i.abi()?), *n)
+      }
     })
   }
 }
@@ -114,6 +118,7 @@ pub enum ExprCode {
   Expr(Id),
   String(TypedString),
   Number(TypedNumber),
+  List(Vec<ExprCode>),
 }
 
 #[derive(Debug, Default)]
@@ -323,6 +328,36 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     ExprKind::Number(i) => {
       result.returns = Type::Number(i.suffix.clone());
       result.code = ExprCode::Number(i.clone());
+    },
+    ExprKind::List(list) => {
+      match list.kind {
+        crate::ast::ExprListKind::Raw => unreachable!(),
+        crate::ast::ExprListKind::FixedArray => {
+          let mut codes = Vec::new();
+          let mut ty = None;
+          for i in &list.exprs {
+            let inner = parse_expr(state, i)?;
+            if let Some(ty) = &ty {
+              if ty != &inner.returns {
+                error!("array type: {} != {}", ty, inner.returns);
+                // todo!()
+              }
+            } else {
+              ty = Some(inner.returns.clone());
+            }
+            match inner.code {
+              ExprCode::Func { .. } => {
+                let id = state.insert_expr(inner);
+                codes.push(ExprCode::Expr(id))
+              },
+              _ => codes.push(inner.code),
+            }
+            ;
+          }
+          result.returns = Type::FixedArray(Box::new(ty.unwrap_or_default()), codes.len());
+          result.code = ExprCode::List(codes);
+        }
+      }
     },
     _ => unreachable!(),
   };

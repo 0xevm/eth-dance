@@ -15,6 +15,7 @@ number_suffix = @{
   "eth" | "gwei"
 }
 number = { (float | int) ~ number_suffix? }
+fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
 
 // https://github.com/pest-parser/book/blob/master/src/examples/rust/literals.md#strings
 string = ${ ident? ~ "\"" ~ (raw_string | escape)* ~ "\"" }
@@ -30,9 +31,10 @@ expr = {
   funccall |
   string |
   number |
+  fixed_array |
   ident
 }
 type = @{ ident | string }
 
-WHITESPACE = _{ " " }
-COMMENT = { "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+WHITESPACE = _{ " " | "\t" }
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }

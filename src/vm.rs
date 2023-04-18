@@ -144,56 +144,86 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
       ExprCode::None => {
         warn!("expr is none: {:?}", id)
       }
-      ExprCode::Expr(i) => {
-        let value = if let Some(value) = vm.values.get(i) {
-          value.clone()
-        } else {
-          anyhow::bail!("vm: copy value from {:?} failed", i);
-        };
-        vm.set_value(*id, info, value)?;
-      }
-      ExprCode::Func { func, this, args, send } => {
-        let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
-        if func.name == "constructor" && *send {
-          let this = this.unwrap();
-          trace!("contract name {}", &func.ns);
-          let bytecode = match vm.values.get(&this) {
-            Some(Value { token: Token::Bytes(bytes), ..}) => bytes,
-            _ => anyhow::bail!("vm: contract bytecode not present"),
-          };
-          let result = deploy_contract(vm, &func.ns, bytecode, &args)?;
-          vm.set_value(*id, info, result.unwrap().into())?;
-        } else if !func.ns.starts_with("@/") {
-          let result = call_global(vm, func.clone(), &args)?;
-          vm.set_value(*id, info, result)?;
-
-        } else if let Some(this) = this {
-          trace!("this_addr: {:?} {:?} {:?}", id, this, vm.get_address(*this));
-          let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
-          let result = if *send {
-            send_tx(vm, this_addr, func.clone(), &args)?
-          } else {
-            call_tx(vm, this_addr, func.clone(), &args)?
-          };
-          vm.set_value(*id, info, result)?;
-        } else {
-          unreachable!()
-        }
-      }
-      ExprCode::Number(number) => {
-        let value = Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
-        vm.set_value(*id, info, value)?;
-      }
-      ExprCode::String(string) => {
-        let value = Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
-        vm.set_value(*id, info, value)?;
-      }
-      // _ => {
-      //   warn!("skip {:?} => {:?}", id, info.expr.returns)
-      // }
+      _ => {},
     }
+    let value = execute_impl(vm, typing, &info.expr.code)?;
+    vm.set_value(*id, info, value)?;
   }
   Ok(())
+}
+
+fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> {
+  match &code {
+    ExprCode::None => {
+      todo!()
+    }
+    ExprCode::Expr(i) => {
+      let value = if let Some(value) = vm.values.get(i) {
+        value.clone()
+      } else {
+        anyhow::bail!("vm: copy value from {:?} failed", i);
+      };
+      return Ok(value)
+    }
+    ExprCode::Func { func, this, args, send } => {
+      let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
+      if func.name == "constructor" && *send {
+        let this = this.unwrap();
+        trace!("contract name {}", &func.ns);
+        let bytecode = match vm.values.get(&this) {
+          Some(Value { token: Token::Bytes(bytes), ..}) => bytes,
+          _ => anyhow::bail!("vm: contract bytecode not present"),
+        };
+        let result = deploy_contract(vm, &func.ns, bytecode, &args)?;
+        return Ok(result.unwrap().into());
+      } else if !func.ns.starts_with("@/") {
+        let result = call_global(vm, func.clone(), &args)?;
+        return Ok(result);
+      } else if let Some(this) = this {
+        trace!("this_addr: {:?} {:?}", this, vm.get_address(*this));
+        let this_addr = vm.get_address(*this).ok_or_else(|| anyhow::format_err!("vm: this not address"))?;
+        let result = if *send {
+          send_tx(vm, this_addr, func.clone(), &args)?
+        } else {
+          call_tx(vm, this_addr, func.clone(), &args)?
+        };
+        return Ok(result)
+      } else {
+        unreachable!()
+      }
+    }
+    ExprCode::Number(number) => {
+      let value = Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
+      return Ok(value)
+    }
+    ExprCode::String(string) => {
+      let value = Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
+      return Ok(value)
+    }
+    ExprCode::List(list) => {
+      let mut values = Vec::new();
+      let mut abi = None;
+      for i in list {
+        let value = execute_impl(vm, typing, i)?;
+        if let Some(abi) = &abi {
+          if abi != &value.abi {
+            error!("execute array: {} != {}", abi, value.abi);
+          }
+        } else {
+          abi = Some(value.abi);
+        }
+        values.push(value.token)
+      }
+      Ok(Value {
+        abi: ParamType::FixedArray(Box::new(abi.unwrap_or(ParamType::FixedBytes(0))), values.len()),
+        token: Token::FixedArray(values),
+        ty: None,
+      })
+    },
+    // _ => {
+    //   warn!("skip {:?} => {:?}", id, info.expr.returns)
+    // }
+  }
 }
 
 fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
