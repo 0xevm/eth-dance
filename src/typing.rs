@@ -76,6 +76,7 @@ pub enum Type {
   Contract(String),
   // Function(String, String),
   Abi(ethabi::ParamType),
+  Bool,
   String(StringPrefix), // the prefix
   Number(NumberSuffix),
   FixedArray(Box<Type>, usize),
@@ -90,10 +91,11 @@ impl Type {
       Type::Contract(_) => ethabi::ParamType::Address,
       // Type::Function(_, _) => return None,
       Type::Abi(i) => i.clone(),
+      Type::Bool => ethabi::ParamType::Bool,
       Type::String(s) => match s {
         StringPrefix::None => ethabi::ParamType::String,
         StringPrefix::Address => ethabi::ParamType::Address,
-        StringPrefix::Byte | StringPrefix::Key | StringPrefix::Hex => ethabi::ParamType::Bytes,
+        StringPrefix::Byte | StringPrefix::Bytecode | StringPrefix::Key | StringPrefix::Hex => ethabi::ParamType::Bytes,
         StringPrefix::Contract => todo!(),
         // _ => {
         //   unreachable!("fixme: type(string) abi {}", s)
@@ -177,8 +179,8 @@ impl Typing {
     self.get_info(id).display = contract.name.to_string();
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
-      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Hex, value: bytecode.to_string().into(), span: Span::default() });
-      self.get_info(id).expr.returns = Type::String(StringPrefix::Hex)
+      self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Bytecode, value: bytecode.to_string().into(), span: Span::default() });
+      self.get_info(id).expr.returns = Type::String(StringPrefix::Bytecode)
     }
     self.contracts.insert(contract.name.to_string(), contract);
     id

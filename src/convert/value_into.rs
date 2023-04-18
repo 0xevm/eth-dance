@@ -1,13 +1,13 @@
-use bigdecimal::{FromPrimitive, num_bigint::BigInt, BigDecimal};
-use ethabi::{ParamType, Token};
 use std::str::FromStr;
-use ethers::{types::{I256, U256}, signers::Signer};
+
+use bigdecimal::{FromPrimitive, num_bigint::BigInt, BigDecimal};
+use ethers::types::{I256, U256};
 
 use crate::{vm::ValueKind, ast::NumberSuffix};
 
 use super::{Error, conv::{ErrorKind, ErrorKindExt}};
 
-enum Number {
+pub enum Number {
   I(I256), U(U256), F(Vec<u8>),
 }
 
@@ -80,11 +80,11 @@ impl TryInto<Number> for &ValueKind {
           },
           NumberSuffix::F(_) => {
             warn!("fixme: ieee");
-            todo!()
+            todo!("fixme: ieee");
           },
           _ => unreachable!(),
         };
-        todo!()
+        Ok(value)
       },
       _ => Err(ErrorKind::NotCompatible(format!("not number")).when("try_into_i256"))
     }
@@ -118,7 +118,6 @@ impl TryInto<f64> for Number {
           _ => {}
         }
       },
-      _ => {}
     };
     return Err(ErrorKind::NotCompatible(format!("Number")).when("try_into_f64"))
   }

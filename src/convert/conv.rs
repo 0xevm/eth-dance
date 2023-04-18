@@ -67,6 +67,7 @@ pub fn try_convert_u256_to_h256(i: U256) -> H256 {
 }
 
 pub fn try_trim_u256(i: U256, n: usize) -> Result<U256, Error> {
+  if n == 256 { return Ok(i) }
   if i >= U256::from(2).pow(U256::from(n)) {
     return Err(ErrorKind::OutOfBounds(n)).when("trim_u256")
   }
@@ -74,6 +75,7 @@ pub fn try_trim_u256(i: U256, n: usize) -> Result<U256, Error> {
 }
 
 pub fn try_trim_i256(i: I256, n: usize) -> Result<I256, Error> {
+  if n == 256 { return Ok(i) }
   if i >= I256::from(2).pow(n as _) {
     return Err(ErrorKind::OutOfBounds(n)).when("trim_i256")
   }

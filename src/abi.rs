@@ -4,7 +4,7 @@ pub use anyhow::Result;
 pub use ethabi::Contract as ContractAbi;
 pub use ethabi::Function as FunctionAbi;
 pub use ethabi::Constructor as ConstructorAbi;
-use ethabi::{ParamType, Token};
+use ethabi::ParamType;
 
 use crate::typing::Type;
 

@@ -29,6 +29,7 @@ impl StringPrefix {
     match self {
       StringPrefix::None => "",
       StringPrefix::Byte => "b",
+      StringPrefix::Bytecode => "bytecode",
       StringPrefix::Address => "address",
       StringPrefix::Contract => "contract",
       StringPrefix::Hex => "hex",
@@ -50,6 +51,7 @@ impl FromStr for StringPrefix {
     let result = match s {
       "" => StringPrefix::None,
       "byte" | "b" => StringPrefix::Byte,
+      "bytecode" => StringPrefix::Bytecode,
       "address" => StringPrefix::Address,
       "contract" => StringPrefix::Contract,
       "hex" => StringPrefix::Hex,
@@ -93,6 +95,7 @@ impl Display for Type {
       Type::Contract(s) => write!(f, "Contract({})", s),
       // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
       Type::Abi(abi) => write!(f, "Abi({})", abi),
+      Type::Bool => write!(f, "Bool"),
       Type::String(s) if s.is_empty() => write!(f, "String"),
       Type::String(s) => write!(f, "Custom({})", s),
       Type::Number(s) => write!(f, "Number({})", s),
@@ -107,6 +110,7 @@ impl FromStr for Type {
   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
     let result = match s {
       "NoneType" => Type::NoneType,
+      "Bool" => Type::Bool,
       "String" => Type::String(StringPrefix::None),
       _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
       _ if s.contains("(") => {

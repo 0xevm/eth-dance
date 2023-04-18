@@ -171,7 +171,7 @@ impl NumberSuffix {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StringPrefix {
-  #[default] None, Byte, Hex, Key, Address, Contract,
+  #[default] None, Byte, Bytecode, Hex, Key, Address, Contract,
 }
 
 impl StringPrefix {

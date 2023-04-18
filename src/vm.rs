@@ -11,7 +11,7 @@ use ethers::{
 use crate::{
   typing::{Typing, ExprCode, Id, Type, Info},
   abi::Func,
-  ast::NumberSuffix,
+  ast::{NumberSuffix, StringPrefix},
 };
 
 // pub struct Error {
@@ -43,9 +43,9 @@ impl std::fmt::Debug for ValueKind {
       Self::Wallet(arg0) => f.debug_tuple("Wallet").field(arg0).finish(),
       Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
       Self::Bytes(arg0) => f.debug_tuple("Bytes").field(arg0).finish(),
-      Self::Bytecode(_arg0) => {
+      Self::Bytecode(arg0) => {
         // TODO: show
-        f.debug_tuple("Bytecode").finish()
+        f.debug_tuple("Bytecode").field(&[arg0.len()]).finish()
       }
       Self::FixedArray(arg0, arg1, arg2) => f.debug_tuple("FixedArray").field(arg0).field(arg1).field(arg2).finish(),
       Self::Array(arg0, arg1) => f.debug_tuple("Array").field(arg0).field(arg1).finish(),
@@ -59,16 +59,24 @@ impl ValueKind {
     const MAX_LEN: usize = 64;
     let s = format!("{:?}", self);
     if s.len() > MAX_LEN {
-      match &self.ty() {
-        Some(ty) => format!("{}...: {}", &s[..MAX_LEN/2], ty),
-        None => format!("{}...", &s[..MAX_LEN]),
-      }
+      format!("{}...: {}", &s[..MAX_LEN/2], self.ty())
     } else {
       s
     }
   }
-  pub fn ty(&self) -> Option<Type> {
-    None
+  pub fn ty(&self) -> Type {
+    match self {
+      ValueKind::Bool(_) => Type::Bool,
+      ValueKind::Number(_, suffix) => Type::Number(*suffix),
+      ValueKind::Address(_, _) => Type::String(StringPrefix::Address),
+      ValueKind::Wallet(_) => Type::String(StringPrefix::Key),
+      ValueKind::String(_) => Type::String(StringPrefix::None),
+      ValueKind::Bytes(_) => Type::String(StringPrefix::Byte),
+      ValueKind::Bytecode(_) => todo!(),
+      ValueKind::FixedArray(_, sub_ty, n) => Type::FixedArray(Box::new(sub_ty.clone()), *n),
+      ValueKind::Array(_, _) => todo!(),
+      ValueKind::Tuple(_) => todo!(),
+    }
   }
 }
 
@@ -171,13 +179,13 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
       }
       _ => {},
     }
-    let value = execute_impl(vm, typing, &info.expr.code)?;
+    let value = execute_impl(vm, typing, &info.expr.code, Some(&info.ty()))?;
     vm.set_value(*id, info, value)?;
   }
   Ok(())
 }
 
-fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<ValueKind> {
+fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>) -> Result<ValueKind> {
   match &code {
     ExprCode::None => {
       todo!()
@@ -214,7 +222,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<ValueKi
           send_tx(vm, this_addr, func.clone(), &args)?;
           ValueKind::Bytes(Vec::new())
         } else {
-          call_tx(vm, this_addr, func.clone(), &args)?
+          call_tx(vm, this_addr, func.clone(), &args, ty)?
         };
         return Ok(result)
       } else {
@@ -231,19 +239,19 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<ValueKi
     }
     ExprCode::List(list) => {
       let mut values = Vec::new();
-      let mut ty = None;
+      let mut sub_ty = None;
       for i in list {
-        let value = execute_impl(vm, typing, i)?;
-        if let Some(ty) = &ty {
-          // if abi != &value.abi {
-          //   error!("execute array: {} != {}", abi, value.abi);
-          // }
+        let value = execute_impl(vm, typing, i, sub_ty.as_ref())?;
+        if let Some(sub_ty) = &sub_ty {
+          if &value.ty() != sub_ty {
+            error!("execute array sub_ty: {} != {}", sub_ty, value.ty());
+          }
         } else {
-          ty = None//Some(value.abi);
+          sub_ty = Some(value.ty())
         }
         values.push(value)
       }
-      Ok(ValueKind::FixedArray(values, ty.unwrap_or_default(), list.len()))
+      Ok(ValueKind::FixedArray(values, sub_ty.unwrap_or_default(), list.len()))
     },
     // _ => {
     //   warn!("skip {:?} => {:?}", id, info.expr.returns)
@@ -293,12 +301,13 @@ fn convert_to_token(input_types: &[ParamType], args: &[&ValueKind]) -> Result<Ve
   let result = args.iter().zip(input_types).map(|(i, abi)| i.clone().into_token(abi)).collect::<Result<_, _>>()?;
   Ok(result)
 }
-fn convert_from_token(output_types: &[ParamType], args: &[Token]) -> Result<ValueKind> {
-  let mut values = args.iter().zip(output_types).map(|(i, abi)| ValueKind::from_token(i, abi)).collect::<Result<Vec<_>, _>>()?;
-  if values.len() == 1 {
-    return Ok(values.remove(0))
-  }
-  Ok(ValueKind::Tuple(values))
+fn convert_from_token(ty: Option<&Type>, mut args: Vec<Token>) -> Result<ValueKind> {
+  let arg = if args.len() == 1 {
+    args.remove(0)
+  } else {
+    Token::Tuple(args)
+  };
+  Ok(ValueKind::from_token_ty(arg, ty)?)
 }
 
 fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Result<()> {
@@ -312,7 +321,7 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Resu
   Ok(())
 }
 
-fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Result<ValueKind> {
+fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind], ty: Option<&Type>) -> Result<ValueKind> {
   let tokens = convert_to_token(&func.input_types, args)?;
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
@@ -321,7 +330,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Resu
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   let bytes = do_call_tx_sync(vm, tx)?;
   let out = ethabi::decode(&func.output_types, &bytes)?;
-  let result = convert_from_token(&func.output_types, &out)?;
+  let result = convert_from_token(ty, out)?;
   // vm.provider.
   Ok(result)
 }
