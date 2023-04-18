@@ -1,107 +1,32 @@
 use std::str::FromStr;
 
-use bigdecimal::FromPrimitive;
-use ethabi::{Address, Token, ParamType};
-use ethers::types::{U256, I256};
+use ethabi::Address;
+use ethers::signers::LocalWallet;
 
 use crate::{
-  vm::EvmValue,
-  ast::{TypedNumber, NumberSuffix, TypedString, StringPrefix},
+  vm::ValueKind,
+  ast::{TypedNumber, TypedString, StringPrefix},
   typing::Type,
 };
 
 use super::{conv::{try_convert_hex_to_bytes, ErrorKindExt, ErrorKind}, Error};
 
-impl From<Address> for EvmValue {
+impl From<Address> for ValueKind {
   fn from(value: Address) -> Self {
-    Self {
-      token: Token::Address(value),
-      abi: ParamType::Address,
-      ty: None,
-    }
+    ValueKind::Address(value, None)
   }
 }
 
-impl TryFrom<TypedNumber> for EvmValue {
+impl TryFrom<TypedNumber> for ValueKind {
   type Error = &'static str;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
-    let ty = Some(Type::Number(value.suffix));
-    trace!("try_from(Value<=TypedNumber): {:?}", ty);
-    match value.suffix {
-      NumberSuffix::None => {
-        if value.value.contains(".") {
-          return Err("cannot convert raw float to int")
-        }
-        let v = U256::from_dec_str(&value.value).map_err(|_| "convert to U256 failed")?;
-        return Ok(EvmValue { token: Token::Uint(v), abi: ParamType::Uint(256), ty })
-      },
-      _ => {}
-    }
+    trace!("try_from(Value<=TypedNumber): {:?}", value.suffix);
     let mut base = bigdecimal::BigDecimal::from_str(&value.value).map_err(|_| "convert to BigDecimal failed")?;
-    match value.suffix {
-      NumberSuffix::Q(_, s) => {
-        base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(1).unwrap() << s);
-      }
-      // NumberSuffix::F(b, s) => {}
-      NumberSuffix::E(_, s) => {
-        base *= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(10).unwrap().pow(s as u32));
-      },
-      _ => {}
-    }
-    let value = match value.suffix {
-      NumberSuffix::Q(true, _) | NumberSuffix::E(true, _) => {
-        if base < bigdecimal::BigDecimal::from_isize(0).unwrap() {
-          return Err("value < 0")
-        }
-        if base >= bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(2).unwrap().pow(256)) {
-          return Err("value >= 2**256")
-        }
-        trace!("try_from(Value<=TypedNumber): base(u) = {}", base.to_string());
-        EvmValue {
-          token: Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
-          abi: ParamType::Uint(256), ty,
-        }
-      },
-      NumberSuffix::Q(false, _) | NumberSuffix::E(false, _) => {
-        let bound = bigdecimal::BigDecimal::from(bigdecimal::num_bigint::BigInt::from_usize(2).unwrap().pow(255));
-        if base >= bound {
-          return Err("value >= 2**255")
-        }
-        if base < -bound {
-          return Err("value < -2**255")
-        }
-        trace!("try_from(Value<=TypedNumber): base(i) = {}", base.to_string());
-        EvmValue {
-          token: Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
-          abi: ParamType::Int(256), ty,
-        }
-      },
-      NumberSuffix::F(size) if [32, 64].contains(&size) => {
-        let bytes = match size {
-          32 => f32::from_str(base.to_string().as_str()).map_err(|_| "f32 convert")?.to_bits().to_be_bytes().to_vec(),
-          64 => f64::from_str(base.to_string().as_str()).map_err(|_| "f64 convert")?.to_bits().to_be_bytes().to_vec(),
-          _ => unreachable!()
-        };
-        assert_eq!(bytes.len(), size/8);
-        EvmValue {
-          abi: ParamType::FixedBytes(bytes.len()), ty,
-          token: Token::FixedBytes(bytes),
-        }
-      },
-      NumberSuffix::F(_) => {
-        warn!("fixme: ieee");
-        EvmValue {
-          token: Token::Int(I256::zero().into_raw()),
-          abi: ParamType::Int(256), ty,
-        }
-      },
-      _ => unreachable!(),
-    };
-    Ok(value)
+    return Ok(ValueKind::Number(base, value.suffix));
   }
 }
 
-impl TryFrom<TypedString> for EvmValue {
+impl TryFrom<TypedString> for ValueKind {
   type Error = Error;
 
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
@@ -110,10 +35,7 @@ impl TryFrom<TypedString> for EvmValue {
     let bytes = match value.prefix {
       StringPrefix::None => {
         let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
-        return Ok(EvmValue {
-          token: Token::String(string),
-          abi: ParamType::String, ty,
-        })
+        return Ok(ValueKind::String(string))
       },
       StringPrefix::Hex | StringPrefix::Key => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
@@ -121,10 +43,7 @@ impl TryFrom<TypedString> for EvmValue {
       }
       StringPrefix::Address => {
         let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
-        return Ok(EvmValue {
-          token: Token::Address(Address::from_slice(&addr)),
-          abi: ParamType::Address, ty,
-        })
+        return Ok(ValueKind::Address(Address::from_slice(&addr), None))
       }
       StringPrefix::Byte => {
         value.value
@@ -132,9 +51,13 @@ impl TryFrom<TypedString> for EvmValue {
       StringPrefix::Contract => todo!(),
       // _ => return Err(ErrorKind::UnknownPrefix(value.prefix.to_string())).when("try_from"),
     };
-    Ok(EvmValue {
-      token: Token::Bytes(bytes),
-      abi: ParamType::Bytes, ty
-    })
+    match value.prefix {
+      StringPrefix::Key => {
+        let wallet = LocalWallet::from_bytes(&bytes).map_err(ErrorKind::from).when("try_from")?;
+        return Ok(ValueKind::Wallet(wallet))
+      }
+      _ => {}
+    }
+    Ok(ValueKind::Bytes(bytes))
   }
 }

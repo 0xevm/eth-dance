@@ -10,7 +10,7 @@ use serde::{Serialize, Deserialize};
 use crate::{
   convert::serde as serde_impl,
   typing::{Type, Typing},
-  vm::VM,
+  vm::{VM, ValueKind},
 };
 
 #[serde_with::serde_as]
@@ -83,7 +83,7 @@ pub struct Item {
   pub id: u64,
   pub name: Option<String>,
   #[serde(flatten)]
-  pub value: Option<Value>,
+  pub value: Option<ValueKind>,
   pub value_hash: H256,
   #[serde_as(as = "serde_with::DisplayFromStr")]
   pub ty: Type,

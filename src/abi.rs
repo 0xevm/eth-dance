@@ -7,7 +7,6 @@ pub use ethabi::Constructor as ConstructorAbi;
 use ethabi::{ParamType, Token};
 
 use crate::typing::Type;
-use crate::vm::EvmValue;
 
 #[derive(Debug)]
 pub struct Scope {
@@ -84,22 +83,6 @@ impl FuncImpl {
     } else {
       let outputs = self.output_types.iter().map(|i| i.clone()).collect::<Vec<_>>();
       Type::Abi(ethabi::ParamType::Tuple(outputs))
-    }
-  }
-
-  pub fn to_output(&self, mut out: Vec<Token>) -> EvmValue {
-    if out.len() == 1 {
-      EvmValue {
-        token: out.remove(0),
-        abi: self.output_types[0].clone(),
-        ty: None,
-      }
-    } else {
-      EvmValue {
-        token: Token::Tuple(out),
-        abi: ParamType::Tuple(self.output_types.clone()),
-        ty: None,
-      }
     }
   }
 }

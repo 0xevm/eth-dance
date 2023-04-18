@@ -66,24 +66,24 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   result?;
   for (name, id) in &state.found {
     // warn!("name: {} {:?}", name, id);
-    let value = vm.values.get(id).unwrap();
-    match value.ty {
-      Some(Type::ContractType(_)) => {
-        if let ethabi::Token::Bytes(i) = &value.token {
-          info!("vm: {:?} = [{}] hash={} len={}", name, value.abi, ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
-          continue;
-        }
-      }
-      _ => {},
-    }
-    info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
+    // let value = vm.values.get(id).unwrap();
+    // match value.ty {
+    //   Some(Type::ContractType(_)) => {
+    //     if let ethabi::Token::Bytes(i) = &value.token {
+    //       info!("vm: {:?} = [{}] hash={} len={}", name, value.abi, ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
+    //       continue;
+    //     }
+    //   }
+    //   _ => {},
+    // }
+    // info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
   }
-  let cache = out::cache::from_vm(&vm, &state);
-  std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
+  // let cache = out::cache::from_vm(&vm, &state);
+  // std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
 
-  let cache: out::cache::Output = serde_json::from_str(&std::fs::read_to_string(format!("{}/cache.json", opts.out))?)?;
-  let contracts = out::contract::gen(&cache.vars);
-  std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
+  // let cache: out::cache::Output = serde_json::from_str(&std::fs::read_to_string(format!("{}/cache.json", opts.out))?)?;
+  // let contracts = out::contract::gen(&cache.vars);
+  // std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
   Ok(())
 }
 

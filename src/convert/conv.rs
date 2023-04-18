@@ -1,6 +1,6 @@
 use std::{string::FromUtf8Error, num::ParseFloatError};
 
-use ethers::types::{I256, U256, H256};
+use ethers::{types::{I256, U256, H256}, signers::WalletError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
@@ -16,6 +16,10 @@ pub enum ErrorKind {
   UnknownPrefix(String),
   #[error("custom error {0}")]
   Custom(String),
+  #[error("wallet {0}")]
+  Wallet(#[from] WalletError),
+  #[error("wallet {0}")]
+  Number(&'static str),
 }
 
 #[derive(Debug, thiserror::Error)]
