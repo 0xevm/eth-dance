@@ -1,11 +1,11 @@
 use ethabi::Token;
 use ethers::types::I256;
 
-use crate::{vm::Value, typing::Type, ast::NumberSuffix};
+use crate::{vm::EvmValue, typing::Type, ast::NumberSuffix};
 
 use super::{Error, conv::{ErrorKind, ErrorKindExt}};
 
-impl TryInto<f64> for &Value {
+impl TryInto<f64> for &EvmValue {
   type Error = Error;
   fn try_into(self) -> Result<f64, Self::Error> {
     match &self.token {

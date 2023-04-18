@@ -5,14 +5,14 @@ use ethabi::{Address, Token, ParamType};
 use ethers::types::{U256, I256};
 
 use crate::{
-  vm::Value,
+  vm::EvmValue,
   ast::{TypedNumber, NumberSuffix, TypedString, StringPrefix},
   typing::Type,
 };
 
 use super::{conv::{try_convert_hex_to_bytes, ErrorKindExt, ErrorKind}, Error};
 
-impl From<Address> for Value {
+impl From<Address> for EvmValue {
   fn from(value: Address) -> Self {
     Self {
       token: Token::Address(value),
@@ -22,7 +22,7 @@ impl From<Address> for Value {
   }
 }
 
-impl TryFrom<TypedNumber> for Value {
+impl TryFrom<TypedNumber> for EvmValue {
   type Error = &'static str;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
     let ty = Some(Type::Number(value.suffix));
@@ -33,7 +33,7 @@ impl TryFrom<TypedNumber> for Value {
           return Err("cannot convert raw float to int")
         }
         let v = U256::from_dec_str(&value.value).map_err(|_| "convert to U256 failed")?;
-        return Ok(Value { token: Token::Uint(v), abi: ParamType::Uint(256), ty })
+        return Ok(EvmValue { token: Token::Uint(v), abi: ParamType::Uint(256), ty })
       },
       _ => {}
     }
@@ -57,7 +57,7 @@ impl TryFrom<TypedNumber> for Value {
           return Err("value >= 2**256")
         }
         trace!("try_from(Value<=TypedNumber): base(u) = {}", base.to_string());
-        Value {
+        EvmValue {
           token: Token::Int(U256::from_dec_str(&base.round(0).to_string()).unwrap()),
           abi: ParamType::Uint(256), ty,
         }
@@ -71,7 +71,7 @@ impl TryFrom<TypedNumber> for Value {
           return Err("value < -2**255")
         }
         trace!("try_from(Value<=TypedNumber): base(i) = {}", base.to_string());
-        Value {
+        EvmValue {
           token: Token::Int(I256::from_dec_str(&base.round(0).to_string()).unwrap().into_raw()),
           abi: ParamType::Int(256), ty,
         }
@@ -83,14 +83,14 @@ impl TryFrom<TypedNumber> for Value {
           _ => unreachable!()
         };
         assert_eq!(bytes.len(), size/8);
-        Value {
+        EvmValue {
           abi: ParamType::FixedBytes(bytes.len()), ty,
           token: Token::FixedBytes(bytes),
         }
       },
       NumberSuffix::F(_) => {
         warn!("fixme: ieee");
-        Value {
+        EvmValue {
           token: Token::Int(I256::zero().into_raw()),
           abi: ParamType::Int(256), ty,
         }
@@ -101,7 +101,7 @@ impl TryFrom<TypedNumber> for Value {
   }
 }
 
-impl TryFrom<TypedString> for Value {
+impl TryFrom<TypedString> for EvmValue {
   type Error = Error;
 
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
@@ -110,7 +110,7 @@ impl TryFrom<TypedString> for Value {
     let bytes = match value.prefix {
       StringPrefix::None => {
         let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
-        return Ok(Value {
+        return Ok(EvmValue {
           token: Token::String(string),
           abi: ParamType::String, ty,
         })
@@ -121,7 +121,7 @@ impl TryFrom<TypedString> for Value {
       }
       StringPrefix::Address => {
         let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
-        return Ok(Value {
+        return Ok(EvmValue {
           token: Token::Address(Address::from_slice(&addr)),
           abi: ParamType::Address, ty,
         })
@@ -132,7 +132,7 @@ impl TryFrom<TypedString> for Value {
       StringPrefix::Contract => todo!(),
       // _ => return Err(ErrorKind::UnknownPrefix(value.prefix.to_string())).when("try_from"),
     };
-    Ok(Value {
+    Ok(EvmValue {
       token: Token::Bytes(bytes),
       abi: ParamType::Bytes, ty
     })

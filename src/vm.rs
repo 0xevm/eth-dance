@@ -20,13 +20,13 @@ use crate::{
 pub use anyhow::Result;
 
 #[derive(Clone)]
-pub struct Value {
+pub struct EvmValue {
   pub token: Token,
   pub abi: ParamType,
   pub ty: Option<Type>,
 }
 
-impl std::fmt::Debug for Value {
+impl std::fmt::Debug for EvmValue {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     const MAX_LEN: usize = 64;
     let s = self.token.to_string();
@@ -37,7 +37,7 @@ impl std::fmt::Debug for Value {
   }
 }
 
-impl Value {
+impl EvmValue {
   pub fn show(&self) -> String {
     const MAX_LEN: usize = 64;
     let s = self.token.to_string();
@@ -54,8 +54,8 @@ impl Value {
 
 pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
 pub struct VM {
-  pub values: BTreeMap<Id, Value>,
-  pub builtin: BTreeMap<String, Value>,
+  pub values: BTreeMap<Id, EvmValue>,
+  pub builtin: BTreeMap<String, EvmValue>,
   pub wallet: Option<LocalWallet>,
   pub confirm_interval: Option<f64>,
   pub provider: Provider,
@@ -71,7 +71,7 @@ impl VM {
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
-  pub fn set_builtin(&mut self, name: &str, value: &Value) {
+  pub fn set_builtin(&mut self, name: &str, value: &EvmValue) {
     match name {
       "$endpoint" => match &value.token {
         Token::String(s) => {
@@ -90,7 +90,7 @@ impl VM {
     };
     self.builtin.insert(name.to_string(), value.clone());
   }
-  pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
+  pub fn set_value(&mut self, id: Id, info: &Info, value: EvmValue) -> Result<()> {
     trace!("set_value: {} = {}", id, value.show());
     let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
@@ -152,7 +152,7 @@ pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
   Ok(())
 }
 
-fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> {
+fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<EvmValue> {
   match &code {
     ExprCode::None => {
       todo!()
@@ -171,7 +171,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> 
         let this = this.unwrap();
         trace!("contract name {}", &func.ns);
         let bytecode = match vm.values.get(&this) {
-          Some(Value { token: Token::Bytes(bytes), ..}) => bytes,
+          Some(EvmValue { token: Token::Bytes(bytes), ..}) => bytes,
           _ => anyhow::bail!("vm: contract bytecode not present"),
         };
         let result = deploy_contract(vm, &func.ns, bytecode, &args)?;
@@ -193,11 +193,11 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> 
       }
     }
     ExprCode::Number(number) => {
-      let value = Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
+      let value = EvmValue::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
       return Ok(value)
     }
     ExprCode::String(string) => {
-      let value = Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
+      let value = EvmValue::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
       return Ok(value)
     }
     ExprCode::List(list) => {
@@ -214,7 +214,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> 
         }
         values.push(value.token)
       }
-      Ok(Value {
+      Ok(EvmValue {
         abi: ParamType::FixedArray(Box::new(abi.unwrap_or(ParamType::FixedBytes(0))), values.len()),
         token: Token::FixedArray(values),
         ty: None,
@@ -226,7 +226,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode) -> Result<Value> 
   }
 }
 
-fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
+fn call_global(_vm: &VM, func: Func, args: &[&EvmValue]) -> Result<EvmValue> {
   let out = match (func.ns.as_str(), func.name.as_str()) {
     ("@assert", "eq") => {
       if args[0].token != args[1].token {
@@ -264,7 +264,7 @@ async fn do_call_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<ethabi::
   Ok(vm.provider.call(&tx.into(), None).await?.to_vec())
 }
 
-fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
+fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&EvmValue]) -> Result<EvmValue> {
   let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
@@ -272,14 +272,14 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
   do_send_tx_sync(vm, tx)?;
-  Ok(Value {
+  Ok(EvmValue {
     token: Token::Uint(U256::zero()),
     abi: ParamType::Uint(256),
     ty: None,
   })
 }
 
-fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<Value> {
+fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&EvmValue]) -> Result<EvmValue> {
   let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
@@ -293,7 +293,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<V
   Ok(result)
 }
 
-fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
+fn deploy_contract(vm: &VM, contract_name: &str, bytecode: &[u8], args: &[&EvmValue]) -> Result<Option<Address>> {
   let tokens = args.iter().map(|i| i.token.clone()).collect::<Vec<_>>();
   info!("deploy_contract: {} {} to {}", contract_name, bytecode.len(), vm.provider.url());
   let mut input_data = Vec::new();

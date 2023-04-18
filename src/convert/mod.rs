@@ -11,11 +11,11 @@ use ethers::{
   types::I256,
 };
 
-use crate::{typing::Type, vm::Value, ast::StringPrefix};
+use crate::{typing::Type, vm::EvmValue, ast::StringPrefix};
 
 use self::conv::{try_convert_u256_to_h256, try_trim_u256, try_trim_i256};
 
-pub fn try_convert(ty: &Type, value: Value) -> Result<Value, Error> {
+pub fn try_convert(ty: &Type, value: EvmValue) -> Result<EvmValue, Error> {
   if Some(ty) == value.ty.as_ref() {
     return Ok(value)
   }
@@ -26,7 +26,7 @@ pub fn try_convert(ty: &Type, value: Value) -> Result<Value, Error> {
         Token::Bytes(bytes) => LocalWallet::from_bytes(bytes).unwrap().address(),
         _ => unreachable!(),
       };
-      Value { token: Token::Address(address), abi: ParamType::Address, ty: None }
+      EvmValue { token: Token::Address(address), abi: ParamType::Address, ty: None }
     }
     _ => value
   };
