@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use ethabi::ethereum_types::H256;
 use serde::{Serialize, Deserialize};
 
-use crate::typing::Type;
+use crate::{typing::Type, vm::ValueKind};
 
-use super::cache::{Item, Value};
+use super::cache::Item;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContractItem {
@@ -20,7 +20,7 @@ pub struct ContractItem {
 pub fn gen(items: &BTreeMap<String, Item>) -> BTreeMap<String, ContractItem> {
   let mut result = BTreeMap::new();
   for (n, v) in items {
-    if let Some(Value::Address(addr)) = &v.value {
+    if let Some(ValueKind::Address(addr, _)) = &v.value {
       let mut item = ContractItem { address: addr.to_string(), contract_path: None, bytecode_hash: None };
       if let Type::Contract(contract_name) = &v.ty {
         item.bytecode_hash = items.get(contract_name).map(|i| i.value_hash);

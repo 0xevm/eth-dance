@@ -78,12 +78,12 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
     // }
     // info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
   }
-  // let cache = out::cache::from_vm(&vm, &state);
-  // std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
+  let cache = out::cache::from_vm(&vm, &state);
+  std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
 
-  // let cache: out::cache::Output = serde_json::from_str(&std::fs::read_to_string(format!("{}/cache.json", opts.out))?)?;
-  // let contracts = out::contract::gen(&cache.vars);
-  // std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
+  let cache: out::cache::Output = serde_json::from_str(&std::fs::read_to_string(format!("{}/cache.json", opts.out))?)?;
+  let contracts = out::contract::gen(&cache.vars);
+  std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
   Ok(())
 }
 
