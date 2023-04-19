@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::ast::{TypeLit, TypeKind, TypePrefix};
+use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind};
 use crate::{
-  ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
+  ast::{Assignment, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Scope, Func, globals, load_abi},
 };
 
@@ -237,7 +237,7 @@ impl Typing {
   }
 }
 
-pub fn parse_file(state: &mut Typing, stmts: &[Stmt]) -> Result<()> {
+pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<()> {
   let mut errors = Vec::new();
   for stmt in stmts {
     if let Err(e) = parse_stmt(state, stmt) {
@@ -250,8 +250,14 @@ pub fn parse_file(state: &mut Typing, stmts: &[Stmt]) -> Result<()> {
     Err(Error::Errors(errors))
   }
 }
+pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
+  match stmt {
+    StmtKind::Assignment(stmt) => parse_assignment(state, stmt),
+    _ => unreachable!(),
+  }
+}
 
-pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
+pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
   let id = match &stmt.lhs {
     Some(expr) => {

@@ -1,5 +1,11 @@
 FILE = ${ SOI ~ block ~ EOI }
-statement = !{ (item ~ "=")? ~ expr }
+statement = !{ forloop | assignment }
+assignment = { (item ~ "=")? ~ expr }
+forloop = {
+  "for" ~ ident ~ "in" ~ expr ~ "{"
+    ~ block ~
+  "}"
+}
 dot = { ":" | "." }
 
 args = { arg ~ ("," ~ arg)* }

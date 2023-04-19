@@ -3,63 +3,76 @@ use std::{rc::Rc, string::FromUtf8Error};
 use pest::{Parser, iterators::Pair};
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
-  #[error("parse")]
+pub enum ErrorKind {
+  #[error(transparent)]
   Parse(#[from] pest::error::Error<Rule>),
-  #[error("{2:?}:{1:?}: {0:?}", )]
-  Errors(Vec<Error>, Span, Rule),
-  #[error("{2:?}:{1:?}: require {0:?}")]
-  Require(Rule, Span, Rule),
-  #[error("{at:?}:{span:?}: require {require:?} found {found:?}")]
-  Mismatch { require: Rule, found: Rule, span: Span, at: Rule },
-  #[error("{at:?}:{span:?}: require {require:?} value error: {value:?}")]
-  Value { require: Rule, value: String, span: Span, at: Rule },
-  #[error("{2:?}:{1:?}: unknown {0:?}")]
-  Unknown(String, Rule, Rule),
-  #[error("{2:?}:{1:?}: utf8 {0:?}")]
-  Utf8Error(FromUtf8Error, Span, Rule),
+  #[error("errors")]
+  Errors(Vec<Error>),
+  #[error("require {0:?}")]
+  Require(Rule),
+  #[error("require {require:?} found {found:?}")]
+  Mismatch { require: Rule, found: Rule },
+  #[error("require {require:?} value error: {value:?}")]
+  Value { require: Rule, value: String },
+  #[error("pair count {0}")]
+  PairCount(usize),
+  #[error("unknown {0:?}")]
+  Unknown(String),
+  #[error(transparent)]
+  Utf8Error(#[from] FromUtf8Error),
+}
+#[derive(Debug, thiserror::Error)]
+#[error("parsing: {message} {at:?} {rule:?}")]
+pub struct Error {
+  #[source]
+  pub kind: ErrorKind,
+  pub message: String,
+  pub rule: Rule,
+  pub at: Option<Span>,
+  // pub backtrace: std::backtrace::Backtrace,
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
-impl Error {
-  pub fn inner_errors(self) -> Vec<Self> {
-    match self {
-      Error::Errors(v, _, _) => v.into_iter().map(|i| i.inner_errors()).flatten().collect(),
-      _ => vec![self]
-    }
+impl ErrorKind {
+  fn when(self, at: &Span, rule: Rule) -> Error {
+    Error { kind: self, message: String::new(), at: Some(at.clone()), rule, }
   }
-  pub fn flatten(self) -> Self {
-    match self {
-      Error::Errors(v, s, r) => {
-        Error::Errors(Error::Errors(v, s.clone(), r).inner_errors(), s, r)
-      }
-      _ => self
-    }
+  fn when_rule(self, when: Rule, rule: Rule) -> Error {
+    Error { kind: self, message: format!("at rule {:?}", when), at: None, rule, }
+  }
+  fn context<S: ToString>(self, s: S, rule: Rule) -> Error {
+    Error { kind: self, message: s.to_string(), at: None, rule, }
+  }
+}
+pub trait ErrorExt<T, E> {
+  fn when(self, at: &Span, rule: Rule) -> Result<T>;
+  fn when_rule(self, when: Rule, rule: Rule) -> Result<T>;
+  fn context<S: ToString>(self, s: S, rule: Rule) -> Result<T>;
+}
+impl<T, E: Into<ErrorKind>> ErrorExt<T, E> for Result<T, E> {
+  fn when(self, at: &Span, rule: Rule) -> Result<T> {
+    self.map_err(|e| e.into().when(at, rule))
+  }
+  fn when_rule(self, when: Rule, rule: Rule) -> Result<T> {
+    self.map_err(|e| e.into().when_rule(when, rule))
+  }
+  fn context<S: ToString>(self, s: S, rule: Rule) -> Result<T> {
+    self.map_err(|e| e.into().context(s, rule))
+  }
+}
 
-  }
-  pub fn span(&self) -> Option<Span> {
-    match self {
-      Error::Errors(_, span, _) |
-      Error::Require(_, span, _) |
-      Error::Mismatch { span, .. } |
-      Error::Value { span, .. } =>
-        Some(span.clone()),
-      _ => None
-    }
-  }
-  pub fn rule(&self) -> Option<Rule> {
-    match self {
-      Error::Errors(_, _, rule) |
-      Error::Require(_, _, rule) |
-      Error::Mismatch { at: rule, .. } |
-      Error::Value { at: rule, .. } =>
-        Some(rule.clone()),
-      _ => None
+impl Error {
+  pub fn inner_errors(self) -> Vec<Error> {
+    match self.kind {
+      ErrorKind::Errors(v) => v.into_iter().map(|i| {
+        i.inner_errors()
+      }).flatten().collect(),
+      _ => vec![self]
     }
   }
   pub fn show_pos(&self, input: &str, line_index: Rc<Vec<usize>>) -> String {
     let mut s = String::new();
-    if let Some(span) = self.span() {
+    if let Some(span) = &self.at {
       let line = match line_index.binary_search(&span.start) {
         Ok(i) => i,
         Err(i) => i.saturating_sub(1),
@@ -68,6 +81,16 @@ impl Error {
       s = format!("{}:{}: {}", line+1, col+1, &input[span.start..span.start+span.len])
     }
     s
+  }
+}
+impl Into<Vec<Error>> for Error {
+  fn into(self) -> Vec<Error> {
+    vec![self]
+  }
+}
+impl From<Vec<Error>> for ErrorKind {
+  fn from(value: Vec<Error>) -> Self {
+    ErrorKind::Errors(value)
   }
 }
 
@@ -85,6 +108,17 @@ pub fn drain_error<T>(items: Vec<Result<T>>) -> Result<Vec<T>, Vec<Error>> {
   } else {
     return Err(errors);
   }
+}
+
+pub fn into_inner_pair<T: pest::RuleType>(pair: Pair<T>) -> Result<Pair<T>, ErrorKind> {
+  let mut pairs = pair.into_inner();
+  let Some(pair) = pairs.next() else {
+    return Err(ErrorKind::PairCount(0))
+  };
+  if pairs.peek().is_some() {
+    return Err(ErrorKind::PairCount(pairs.count() + 1))
+  };
+  Ok(pair)
 }
 
 #[derive(Parser)]
@@ -249,7 +283,7 @@ pub enum ExprKind {
 }
 
 #[derive(Debug, Default)]
-pub struct Stmt {
+pub struct Assignment {
   pub lhs: Option<ExprLit>,
   pub equal_span: Option<Span>,
   pub rhs: ExprLit,
@@ -257,8 +291,29 @@ pub struct Stmt {
   pub span: Span,
 }
 
-pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
-  let mut pairs = AstParser::parse(Rule::FILE, input)?;
+#[derive(Debug, Default)]
+pub struct Forloop {
+  pub lhs: ExprLit,
+  pub rhs: ExprLit,
+  pub stmts: Vec<StmtKind>,
+  pub span: Span,
+}
+
+#[derive(Debug)]
+pub enum StmtKind {
+  Comment(String),
+  Assignment(Assignment),
+  Forloop(Forloop),
+}
+
+impl Default for StmtKind {
+  fn default() -> Self {
+    Self::Comment(String::new())
+  }
+}
+
+pub fn parse(input: &str) -> Result<Vec<StmtKind>>  {
+  let mut pairs = AstParser::parse(Rule::FILE, input).context("parse ast", Rule::FILE)?;
   if let Some(pair) = pairs.next() {
     match pair.as_rule() {
       Rule::FILE => {
@@ -268,11 +323,11 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
       _ => unreachable!(),
     }
   } else {
-    Err(Error::Require(Rule::FILE, Span::default(), Rule::FILE))
+    Err(ErrorKind::Require(Rule::FILE)).context("parse ast", Rule::FILE)
   }
 }
 
-fn parse_block(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
+fn parse_block(pair: Pair<Rule>) -> Result<Vec<StmtKind>> {
   assert_eq!(pair.as_rule(), Rule::block);
   let span = pair.as_span().into();
   let pairs = pair.into_inner();
@@ -284,14 +339,26 @@ fn parse_block(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
       _ => unreachable!(),
     }
   }
-  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::FILE))
+  drain_error(result).when(&span, Rule::FILE)
+}
+
+fn parse_stmt(pair: Pair<Rule>) -> Result<StmtKind> {
+  assert_eq!(pair.as_rule(), Rule::statement);
+  let span = pair.as_span().into();
+  let pair = into_inner_pair(pair).when(&span, Rule::statement)?;
+  match pair.as_rule() {
+    Rule::assignment => parse_assignment(pair).map(StmtKind::Assignment).when(&span, Rule::statement),
+    _ => unreachable!(),
+  }
+// Rule::forloop => parse_forloop(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
 }
 
 // statement = { (item ~ "=")? ~ expr }
-fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
+fn parse_assignment(pair: Pair<Rule>) -> Result<Assignment, Vec<Error>> {
+  assert_eq!(pair.as_rule(), Rule::assignment);
   let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
-  let mut result = Stmt::default();
+  let mut result = Assignment::default();
   let pair = pairs.peek();
   let mut errors = Vec::new();
   match pair.as_ref().map(Pair::as_rule) {
@@ -304,8 +371,8 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
     _ => {},
   }
   let Some(pair) = pairs.next() else {
-    errors.push(Error::Require(Rule::expr, span.clone(), Rule::statement));
-    return Err(Error::Errors(errors, span, Rule::statement))
+    errors.push(ErrorKind::Require(Rule::expr).when(&span.clone(), Rule::statement));
+    return Err(errors)
   };
   match parse_expr(pair) {
     Ok(expr) => result.rhs = expr,
@@ -314,7 +381,7 @@ fn parse_stmt(pair: Pair<Rule>) -> Result<Stmt> {
   if errors.is_empty() {
     Ok(result)
   } else {
-    Err(Error::Errors(errors, span, Rule::statement))
+    Err(errors)
   }
 }
 
@@ -328,22 +395,22 @@ fn parse_expr(pair: Pair<Rule>) -> Result<ExprLit> {
   })
 }
 
-// expr = { funccall | string | number | item }
+// expr = { forloop | funccall | string | number | item }
 fn parse_expr_inner(pair: Pair<Rule>) -> Result<ExprKind> {
   let span = pair.as_span().into();
   let expr = match pair.as_rule() {
     Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
-    Rule::fixed_array => parse_array(pair).map(ExprKind::List)?,
+    Rule::fixed_array => parse_array(pair).map(ExprKind::List).when(&span, Rule::expr)?,
     Rule::string => parse_string_typed(pair).map(ExprKind::String)?,
     Rule::number => parse_number(pair).map(ExprKind::Number)?,
     Rule::ident => parse_ident(pair).map(ExprKind::Ident)?,
-    rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
+    rule => return Err(ErrorKind::Mismatch { require: Rule::expr, found: rule }).when(&span, Rule::expr),
   };
   Ok(expr)
 }
 
 // fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
-fn parse_array(pair: Pair<Rule>) -> Result<ExprList> {
+fn parse_array(pair: Pair<Rule>) -> Result<ExprList, Vec<Error>> {
   assert_eq!(pair.as_rule(), Rule::fixed_array);
   let span: Span = pair.as_span().into();
   let pairs = pair.into_inner();
@@ -352,7 +419,7 @@ fn parse_array(pair: Pair<Rule>) -> Result<ExprList> {
     assert_eq!(pair.as_rule(), Rule::expr);
     exprs.push(parse_expr(pair))
   }
-  let exprs = drain_error(exprs).map_err(|e| Error::Errors(e, span.clone(), Rule::fixed_array))?;
+  let exprs = drain_error(exprs)?;
   Ok(ExprList {
     span, exprs, kind: ExprListKind::FixedArray,
   })
@@ -360,6 +427,7 @@ fn parse_array(pair: Pair<Rule>) -> Result<ExprList> {
 
 // funccall = { item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
+  assert_eq!(pair.as_rule(), Rule::funccall);
   let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut funccall = Funccall::default();
@@ -371,32 +439,32 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   match (pair.as_rule(), pair.as_str()) {
     (Rule::dot, ".") => funccall.dot = Accessor::Dot,
     (Rule::dot, ":") => funccall.dot = Accessor::Colon,
-    (Rule::dot, s) => return Err(Error::Value { require: Rule::dot, value: s.to_string(), span, at: Rule::funccall }),
-    (rule, _) => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall }),
+    (Rule::dot, s) => return Err(ErrorKind::Value { require: Rule::dot, value: s.to_string() }).when(&span, Rule::funccall),
+    (rule, _) => return Err(ErrorKind::Mismatch { require: Rule::dot, found: rule }).when(&span, Rule::funccall),
   }
   funccall.dot_span = pair.as_span().into();
 
   let pair = pairs.next().expect("pairs: funccall => name");
   match pair.as_rule() {
     Rule::ident => funccall.name = parse_ident(pair)?,
-    rule => return Err(Error::Mismatch { require: Rule::dot, found: rule, span, at: Rule::funccall })
+    rule => return Err(ErrorKind::Mismatch { require: Rule::dot, found: rule}).when(&span, Rule::funccall)
   }
 
   if let Some(pair) = pairs.next() {
     match pair.as_rule() {
-      Rule::args => funccall.args = parse_args(pair)?,
-      rule => return Err(Error::Mismatch { require: Rule::args, found: rule, span, at: Rule::funccall })
+      Rule::args => funccall.args = parse_args(pair).when(&span, Rule::funccall)?,
+      rule => return Err(ErrorKind::Mismatch { require: Rule::args, found: rule }).when(&span, Rule::funccall)
     }
   }
   Ok(funccall)
 }
 
 // args = { arg ~ ("," ~ arg)* }
-fn parse_args(pair: Pair<Rule>) -> Result<Vec<ExprLit>> {
+fn parse_args(pair: Pair<Rule>) -> Result<Vec<ExprLit>, Vec<Error>> {
   assert_eq!(pair.as_rule(), Rule::args);
-  let span = pair.as_span().into();
+  // let span = pair.as_span().into();
   let result = pair.into_inner().map(parse_arg).collect::<Vec<_>>();
-  drain_error(result).map_err(|e| Error::Errors(e, span, Rule::args))
+  drain_error(result)
 }
 
 // arg = { expr ~ (":" ~ type)? }
@@ -471,8 +539,8 @@ pub fn parse_type(pair: Pair<Rule>) -> Result<TypeLit> {
       Rule::ident => TypeKind::Ident(pair.as_str().to_string()),
       Rule::string => {
         let inner = parse_string(pair)?;
-        let prefix = inner.prefix.parse().map_err(|_| Error::Unknown(inner.prefix.clone(), Rule::ident, Rule::r#type))?;
-        let s = String::from_utf8(inner.value).map_err(|e| Error::Utf8Error(e, span.clone(), Rule::r#type))?;
+        let prefix = inner.prefix.parse().map_err(|_| ErrorKind::Unknown(inner.prefix.clone())).when_rule(Rule::ident, Rule::r#type)?;
+        let s = String::from_utf8(inner.value).when(&span.clone(), Rule::r#type)?;
         TypeKind::String(s, prefix)
       }
       _ => unreachable!()
@@ -512,10 +580,10 @@ fn parse_string(pair: Pair<Rule>) -> Result<StringLit> {
         };
         match c {
           Some(c) => result.value.extend(c.to_string().as_bytes()),
-          None => return Err(Error::Value { require: Rule::escape, value: s.to_string(), span, at: Rule::string }),
+          None => return Err(ErrorKind::Value { require: Rule::escape, value: s.to_string() }.when(&span, Rule::string)),
         }
       }
-      rule => return Err(Error::Mismatch { require: Rule::raw_string, found: rule, span, at: Rule::string }),
+      rule => return Err(ErrorKind::Mismatch { require: Rule::raw_string, found: rule }.when(&span, Rule::string)),
     }
   }
   Ok(result)
@@ -523,7 +591,7 @@ fn parse_string(pair: Pair<Rule>) -> Result<StringLit> {
 
 fn parse_string_typed(pair: Pair<Rule>) -> Result<TypedString> {
   let i = parse_string(pair)?;
-  let prefix = i.prefix.parse().map_err(|_| Error::Unknown(i.prefix.clone(), Rule::ident, Rule::string))?;
+  let prefix = i.prefix.parse().map_err(|_| ErrorKind::Unknown(i.prefix.clone())).when_rule(Rule::ident, Rule::string)?;
   Ok(TypedString { prefix, value: i.value, span: i.span })
 }
 
@@ -537,14 +605,14 @@ fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
   let pair = pairs.next().expect("pairs: number => int");
   match pair.as_rule() {
     Rule::float | Rule::int => result.value = pair.as_str().to_string(),
-    rule => return Err(Error::Mismatch { require: Rule::float, found: rule, span, at: Rule::number })
+    rule => return Err(ErrorKind::Mismatch { require: Rule::float, found: rule }.when(&span, Rule::number))
   }
 
   result.suffix = if let Some(pair) = pairs.next() {
     assert_eq!(pair.as_rule(), Rule::number_suffix);
     match pair.as_rule() {
       Rule::number_suffix => parse_number_suffix(pair.as_str(), pair.as_span().into())?,
-      rule => return Err(Error::Mismatch { require: Rule::number_suffix, found: rule, span, at: Rule::number })
+      rule => return Err(ErrorKind::Mismatch { require: Rule::number_suffix, found: rule }.when(&span, Rule::number))
     }
   } else {
     NumberSuffix::None
@@ -565,7 +633,7 @@ pub(crate) fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix>
   let n = if str.len() > 1 {
     match usize::from_str_radix(&str[1..], 10) {
       Ok(n) => Some(n),
-      _ => return Err(Error::Value { require: Rule::int, value: str[1..].to_string(), span, at: Rule::number_suffix }),
+      _ => return Err(ErrorKind::Value { require: Rule::int, value: str[1..].to_string()}.when(&span, Rule::number_suffix)),
     }
   } else { None };
   let result = match str.chars().nth(0) {
@@ -577,7 +645,7 @@ pub(crate) fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix>
     },
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
     Some('e') => NumberSuffix::E(is_u, n.unwrap_or(0)),
-    _ => return Err(Error::Value { require: Rule::number_suffix, value: str.to_string(), span, at: Rule::number_suffix }),
+    _ => return Err(ErrorKind::Value { require: Rule::number_suffix, value: str.to_string() }.when(&span, Rule::number_suffix)),
   };
   Ok(result)
 }
