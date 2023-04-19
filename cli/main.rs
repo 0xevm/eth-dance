@@ -64,7 +64,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   }
   debug!("last_id: {:?}", state.last_id);
   result?;
-  for (name, id) in &state.found {
+  for (name, id) in &state.scopes.latest {
     let value = vm.get_value(*id).unwrap();
     if let ValueKind::Bytecode(i) = value {
       info!("vm: {:?}({}) = <{}> hash={} len={}", name, id, "bytecode", ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());

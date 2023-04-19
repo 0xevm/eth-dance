@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,6 +18,8 @@ pub enum ErrorKind {
   FuncNotFound(String, String),
   #[error("infer type failed {0}.{1}")]
   InferTypeFailed(String, String),
+  #[error(transparent)]
+  Utf8(#[from] std::string::FromUtf8Error),
   #[error(transparent)]
   Io(#[from] std::io::Error),
   #[error(transparent)]
@@ -135,6 +137,7 @@ pub enum ExprCode {
   String(TypedString),
   Number(TypedNumber),
   List(Vec<ExprCode>),
+  // Next(Id),
 }
 
 #[derive(Debug, Default)]
@@ -151,6 +154,7 @@ pub struct Info {
   pub display: String,
   pub span: Span,
   pub expr_span: Span,
+  pub keys: Vec<Id>,
 }
 
 impl Info {
@@ -159,6 +163,65 @@ impl Info {
   }
 }
 
+// You could not shallow names in different scope
+#[derive(Debug, Clone)]
+pub struct Scopes {
+  pub stack: Vec<Id>,
+  pub scopes: BTreeMap<Id, BTreeMap<String, Id>>,
+  pub symbols: BTreeMap<String, (Id, Id)>,
+  pub latest: BTreeMap<String, Id>,
+}
+
+impl Scopes {
+  pub fn new() -> Self {
+    let init = Id(0, 0);
+    let mut scopes = BTreeMap::new();
+    scopes.insert(init, Default::default());
+    Self {
+      stack: vec![init], scopes, symbols: Default::default(), latest: Default::default(),
+    }
+  }
+  pub fn insert(&mut self, name: String, id: Id) {
+    let current = *self.stack.last().unwrap();
+    let current_scope = self.scopes.get_mut(&current).unwrap();
+    current_scope.insert(name.to_string(), id);
+    self.symbols.entry(name.to_string()).or_insert((current, id));
+    self.latest.insert(name.to_string(), id);
+  }
+}
+
+#[derive(Default)]
+pub struct Modules {
+  pub modules: BTreeMap<ModuleName, Module>,
+  pub contracts: BTreeMap<String, ModuleName>,
+  pub contract_names: BTreeMap<ModuleName, String>,
+}
+
+impl Modules {
+  pub fn new(predefined: Vec<Module>) -> Self {
+    let mut modules = Self::default();
+    for module in predefined {
+      modules.insert(module);
+    }
+    modules
+  }
+
+  pub fn insert(&mut self, module: Module) {
+    // let module_name = module.name.to_string();
+    self.modules.insert(module.name.to_string(), module);
+    // self.contracts.insert(name.to_string(), module_name.to_string());
+    // self.contract_names.insert(module_name.to_string(), name);
+  }
+  pub fn get(&self, name: &str) -> Option<&Module> {
+    self.modules.get(name)
+  }
+  pub fn contains(&self, name: &str) -> bool {
+    self.modules.contains_key(name)
+  }
+}
+
+pub type ModuleName = String;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Id(pub u64, pub u64);
 pub struct Typing {
@@ -166,37 +229,33 @@ pub struct Typing {
   pub working_dir: PathBuf,
   pub last_id: Id,
   pub infos: BTreeMap<Id, Info>,
-  pub modules: BTreeMap<String, Module>,
-  pub found: BTreeMap<String, Id>,
+  pub scopes: Scopes,
+  pub modules: Modules,
 }
 
 impl Typing {
   pub fn new(current_file: PathBuf, working_dir: PathBuf) -> Self {
-    let mut contracts = BTreeMap::new();
-    for module in globals() {
-      contracts.insert(module.name.to_string(), module);
-    }
     Self {
       current_file,
       working_dir,
       last_id: Id(0, 0),
       infos: BTreeMap::new(),
-      modules: contracts,
-      found: BTreeMap::new(),
+      modules: Modules::new(globals()),
+      scopes: Scopes::new(),
     }
   }
 
   pub fn add_module(&mut self, contract: Module) -> Id {
     let id = self.new_id();
     self.infos.entry(id).or_default();
-    self.found.insert(contract.name.to_string(), id);
-    self.get_info(id).display = contract.name.to_string();
+    // self.scopes.insert(contract.name.to_string(), id);
+    // self.get_info(id).display = name.to_string();
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
       self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Bytecode, value: bytecode.to_string().into(), span: Span::default() });
       self.get_info(id).expr.returns = Type::String(StringPrefix::Bytecode)
     }
-    self.modules.insert(contract.name.to_string(), contract);
+    self.modules.insert(contract);
     id
   }
 
@@ -215,7 +274,7 @@ impl Typing {
   }
 
   pub fn find_name(&self, name: &str) -> Option<Id> {
-    self.found.get(name).copied()
+    self.scopes.latest.get(name).copied()
   }
 
   pub fn insert_expr(&mut self, expr: Expression) -> Id {
@@ -243,14 +302,27 @@ impl Typing {
     self.infos.entry(id).or_default();
     self.get_info(id).display = name.to_string();
     self.get_info(id).span = span;
-    self.found.insert(name.to_string(), id);
+    self.scopes.insert(name.to_string(), id);
     id
   }
 }
 
 pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<(), Vec<Error>> {
   let mut errors = Vec::new();
-  for stmt in stmts {
+
+  let mut visited = BTreeSet::new();
+
+  // first pass: parse modules and fn defines
+  for (i, stmt) in stmts.iter().enumerate() {
+    match parse_stmt_types(state, stmt) {
+      Ok(true) => { visited.insert(i); }
+      Err(e) => { errors.push(e); }
+      _ => {},
+    }
+  }
+
+  for (i, stmt) in stmts.iter().enumerate() {
+    if visited.contains(&i) { continue }
     if let Err(e) = parse_stmt(state, stmt) {
       errors.push(e)
     }
@@ -261,6 +333,43 @@ pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<(), Vec<Erro
     Err(errors)
   }
 }
+pub fn parse_stmt_types(state: &mut Typing, stmt: &StmtKind) -> Result<bool> {
+  match stmt {
+    StmtKind::Assignment(stmt) => {
+      let (ty, id) = match &stmt.rhs.inner {
+        ExprKind::String(i) if i.prefix == StringPrefix::Contract =>{
+          let span = &i.span;
+          let path = String::from_utf8(i.value.clone()).when(&span)?;
+          let real_path = if path.starts_with(".") {
+            warn!("fixme: resolve path related to work");
+            Path::new(&state.current_file).parent().unwrap().join(&path).canonicalize()
+          } else {
+            Path::new(&state.working_dir).join(&path.strip_prefix("@/").unwrap()).canonicalize()
+          }.context(&path, &span)?;
+          let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).context(&path, &span)?.to_string_lossy());
+          warn!("fixme: check resolved path in moduels {}", resolved_path);
+          let content = std::fs::read_to_string(real_path).context(&resolved_path, &span)?;
+          let module = load_abi(&resolved_path, &content).map_err(ErrorKind::Abi).context(&resolved_path, &span)?;
+          let id = state.add_module(module);
+          (Type::ContractType(resolved_path), id)
+        }
+        _ => return Ok(false)
+      };
+      if let Some(lhs) = &stmt.lhs {
+        let name = match &lhs.inner {
+          ExprKind::Ident(i) => i.to_string(),
+          _ => unreachable!("lhs must be ident"),
+        };
+        state.get_info(id).should = Some(ty);
+        state.get_info(id).display = name.to_string();
+        state.scopes.insert(name, id);
+      }
+      Ok(true)
+    }
+    StmtKind::Comment(_) => Ok(true),
+    _ => Ok(false),
+  }
+}
 pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
   match stmt {
     StmtKind::Assignment(stmt) => parse_assignment(state, stmt),
@@ -269,6 +378,10 @@ pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
   }
 }
 
+/// forloop would generate ir like this:
+/// $$1 next(collection_id)
+/// $$... stmts
+/// $$3 end
 fn parse_forloop(state: &mut Typing, stmt: &Forloop) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
   Ok(())
@@ -352,8 +465,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
   let mut result = Expression::default();
   match &expr.inner {
     ExprKind::Ident(i) => {
-      let dst = state.find_name(&i.to_string());
-      match dst {
+      match state.find_name(&i.to_string()) {
         Some(dst) => {
           result.returns = state.get_info(dst).ty().clone();
           result.code = ExprCode::Expr(dst);
@@ -375,19 +487,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       result.code = code;
     },
     ExprKind::String(i) if i.prefix == StringPrefix::Contract => {
-      let path = String::from_utf8(i.value.clone()).unwrap();
-      let real_path = if path.starts_with(".") {
-        warn!("fixme: resolve path related to work");
-        Path::new(&state.current_file).parent().unwrap().join(&path).canonicalize()
-      } else {
-        Path::new(&state.working_dir).join(&path.strip_prefix("@/").unwrap()).canonicalize()
-      }.context(&path, &span)?;
-      let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).context(&path, &span)?.to_string_lossy());
-      let content = std::fs::read_to_string(real_path).context(&resolved_path, &span)?;
-      let module = load_abi(&resolved_path, &content).map_err(ErrorKind::Abi).context(&resolved_path, &span)?;
-      let id = state.add_module(module);
-      result.returns = Type::ContractType(resolved_path);
-      result.code = ExprCode::Expr(id);
+      unreachable!()
     },
     ExprKind::String(i) => {
       result.returns = Type::String(i.prefix.clone());
@@ -441,7 +541,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
       this = Some(id);
       trace!("func module: {} {:?}", name, state.get_info(id));
       state.get_info(id).ty().clone()
-    } else if state.modules.contains_key(&name) {
+    } else if state.modules.contains(&name) {
       Type::Global(name)
     } else {
       Type::NoneType
