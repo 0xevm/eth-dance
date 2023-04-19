@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, string::FromUtf8Error};
 
 use pest::{Parser, iterators::Pair};
 
@@ -16,6 +16,8 @@ pub enum Error {
   Value { require: Rule, value: String, span: Span, at: Rule },
   #[error("{2:?}:{1:?}: unknown {0:?}")]
   Unknown(String, Rule, Rule),
+  #[error("{2:?}:{1:?}: utf8 {0:?}")]
+  Utf8Error(FromUtf8Error, Span, Rule),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -87,7 +89,7 @@ pub fn drain_error<T>(items: Vec<Result<T>>) -> Result<Vec<T>, Vec<Error>> {
 
 #[derive(Parser)]
 #[grammar = "parser.pest"] // relative to src
-struct AstParser;
+pub struct AstParser;
 
 #[derive(Debug, Clone, Default)]
 pub struct Span {
@@ -126,13 +128,27 @@ pub struct Ident {
 }
 
 #[derive(Debug, Default)]
-pub struct ExprLit {
-  pub inner: ExprKind,
-  pub hint: String, // TODO Type::from_str
+pub enum TypeKind {
+  #[default] None,
+  Ident(String),
+  String(String, TypePrefix),
+  Array(Box<TypeLit>, Option<usize>),
+}
+
+#[derive(Debug, Default)]
+pub struct TypeLit {
+  pub kind: TypeKind,
   pub span: Span,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default)]
+pub struct ExprLit {
+  pub inner: ExprKind,
+  pub hint: Option<TypeLit>, // TODO Type::from_str
+  pub span: Span,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, )]
 pub enum ExprListKind {
   #[default] Raw, FixedArray,
 }
@@ -169,15 +185,38 @@ impl NumberSuffix {
   }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, strum::EnumString)]
+#[strum(serialize_all = "snake_case")]
 pub enum StringPrefix {
-  #[default] None, Byte, Bytecode, Hex, Key, Address, Contract,
+  #[default]
+  #[strum(serialize = "", serialize = "string")]
+  None,
+  #[strum(serialize = "byte", serialize = "b")]
+  Byte,
+  Bytecode, Hex, Key, Address, Contract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, strum::EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum TypePrefix {
+  #[default]
+  #[strum(serialize = "", serialize = "string")]
+  None,
+  Abi, Contract,
 }
 
 impl StringPrefix {
   pub fn is_empty(self) -> bool {
     self == StringPrefix::None
   }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StringLit {
+  pub prefix: String,
+  pub value: Vec<u8>,
+  // pub value_span: Span,
+  pub span: Span,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -282,7 +321,7 @@ fn parse_expr(pair: Pair<Rule>) -> Result<ExprLit> {
   let mut pairs = pair.into_inner();
   let expr = parse_expr_inner(pairs.next().expect("pairs: expr => inner"))?;
   Ok(ExprLit {
-    inner: expr, span, hint: String::new(),
+    inner: expr, span, hint: None,
   })
 }
 
@@ -292,7 +331,7 @@ fn parse_expr_inner(pair: Pair<Rule>) -> Result<ExprKind> {
   let expr = match pair.as_rule() {
     Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
     Rule::fixed_array => parse_array(pair).map(ExprKind::List)?,
-    Rule::string => parse_string(pair).map(ExprKind::String)?,
+    Rule::string => parse_string_typed(pair).map(ExprKind::String)?,
     Rule::number => parse_number(pair).map(ExprKind::Number)?,
     Rule::ident => parse_ident(pair).map(ExprKind::Ident)?,
     rule => return Err(Error::Mismatch { require: Rule::expr, found: rule, span, at: Rule::expr }),
@@ -364,7 +403,7 @@ fn parse_arg(pair: Pair<Rule>) -> Result<ExprLit> {
   let mut pairs = pair.into_inner();
   let mut expr = parse_expr(pairs.next().expect("pairs: arg => expr"))?;
   if let Some(pair) = pairs.next() {
-    expr.hint = parse_type(pair)?;
+    expr.hint = Some(parse_type(pair)?);
   }
   expr.span = span;
   assert!(pairs.next().is_none());
@@ -381,7 +420,7 @@ fn parse_item(pair: Pair<Rule>) -> Result<ExprLit> {
   let ident = parse_ident(pair)?;
   result.inner = ExprKind::Ident(ident);
   if let Some(pair) = pairs.next() {
-    result.hint = parse_type(pair)?;
+    result.hint = Some(parse_type(pair)?);
   }
   result.span = span;
   Ok(result)
@@ -402,21 +441,54 @@ fn parse_ident(pair: Pair<Rule>) -> Result<Ident> {
   Ok(result)
 }
 
-fn parse_type(pair: Pair<Rule>) -> Result<String> {
+// type = {
+//   ident | string |
+//   "[" ~ type ~ (";" ~ int)? ~ "]"
+// }
+pub fn parse_type(pair: Pair<Rule>) -> Result<TypeLit> {
   assert_eq!(pair.as_rule(), Rule::r#type);
-  error!("parse_type: {}", pair.as_str());
-  Ok(pair.as_str().to_string())
+  let span: Span = pair.as_span().into();
+  let s = pair.as_str().trim();
+  warn!("parse_type: {}", s);
+  let mut pairs = pair.into_inner();
+  let kind = if s.starts_with("[") {
+    let pair = pairs.next().expect("pairs: type('[') => type");
+    assert_eq!(pair.as_rule(), Rule::r#type);
+    let inner = parse_type(pair)?;
+    let size = match pairs.next() {
+      Some(pair) => {
+        assert_eq!(pair.as_rule(), Rule::int);
+        Some(pair.as_str().trim().parse::<usize>().expect("parse int"))
+      }
+      _ => None,
+    };
+    TypeKind::Array(Box::new(inner), size)
+  } else if let Some(pair) = pairs.next() {
+    match pair.as_rule() {
+      Rule::ident => TypeKind::Ident(pair.as_str().to_string()),
+      Rule::string => {
+        let inner = parse_string(pair)?;
+        let prefix = inner.prefix.parse().map_err(|_| Error::Unknown(inner.prefix.clone(), Rule::ident, Rule::r#type))?;
+        let s = String::from_utf8(inner.value).map_err(|e| Error::Utf8Error(e, span.clone(), Rule::r#type))?;
+        TypeKind::String(s, prefix)
+      }
+      _ => unreachable!()
+    }
+  } else {
+    unreachable!()
+  };
+
+  Ok(TypeLit { kind, span })
 }
 
 // string = ${ ident? ~ "\"" ~ (raw_string | escape)* ~ "\"" }
-fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
+fn parse_string(pair: Pair<Rule>) -> Result<StringLit> {
   assert_eq!(pair.as_rule(), Rule::string);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
-  let mut result = TypedString::default();
+  let mut result = StringLit::default();
   if pairs.peek().as_ref().map(|i| i.as_rule()) == Some(Rule::ident) {
-    let prefix = parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string();
-    result.prefix = prefix.parse().map_err(|_| Error::Unknown(prefix.clone(), Rule::ident, Rule::string))?;
+    result.prefix = parse_ident(pairs.next().expect("pairs: string => ident"))?.to_string();
   }
   for pair in pairs {
     let s = pair.as_str();
@@ -444,6 +516,12 @@ fn parse_string(pair: Pair<Rule>) -> Result<TypedString> {
     }
   }
   Ok(result)
+}
+
+fn parse_string_typed(pair: Pair<Rule>) -> Result<TypedString> {
+  let i = parse_string(pair)?;
+  let prefix = i.prefix.parse().map_err(|_| Error::Unknown(i.prefix.clone(), Rule::ident, Rule::string))?;
+  Ok(TypedString { prefix, value: i.value, span: i.span })
 }
 
 // number = { (float | int) ~ number_suffix? }

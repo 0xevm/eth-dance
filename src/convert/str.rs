@@ -5,7 +5,7 @@ use ethers::signers::LocalWallet;
 use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
-use crate::typing::Id;
+use crate::typing::{Id, self};
 use crate::vm::ValueKind;
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
@@ -39,30 +39,6 @@ impl StringPrefix {
       StringPrefix::Hex => "hex",
       StringPrefix::Key => "key",
     }
-  }
-}
-
-impl Display for StringPrefix {
-  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    write!(f, "{}", self.as_str())
-  }
-}
-
-impl FromStr for StringPrefix {
-  type Err = &'static str;
-
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    let result = match s {
-      "" => StringPrefix::None,
-      "byte" | "b" => StringPrefix::Byte,
-      "bytecode" => StringPrefix::Bytecode,
-      "address" => StringPrefix::Address,
-      "contract" => StringPrefix::Contract,
-      "hex" => StringPrefix::Hex,
-      "key" => StringPrefix::Key,
-      _ => return Err("unknown string prefix"),
-    };
-    Ok(result)
   }
 }
 
@@ -126,7 +102,7 @@ impl Display for Type {
       Type::String(StringPrefix::Bytecode) | Type::String(StringPrefix::Contract) => write!(f, "bytecode"),
       Type::String(StringPrefix::Key) => write!(f, "wallet"),
       Type::Global(s) => write!(f, "@{}", s),
-      Type::Contract(s) => write!(f, "{}", s),
+      Type::Contract(s) => write!(f, "{:?}", s),
       // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
       Type::Abi(abi) => write!(f, "abi{:?}", abi.to_string()),
       Type::ContractType(s) => write!(f, "contract{:?}", s),
@@ -140,39 +116,18 @@ impl FromStr for Type {
   type Err = &'static str;
 
   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-    let result = match s {
-      "none" => Type::NoneType,
-      "bool" => Type::Bool,
-      "string" => Type::String(StringPrefix::None),
-      "address" => Type::String(StringPrefix::Address),
-      "wallet" => Type::String(StringPrefix::Key),
-      "bytes" => Type::String(StringPrefix::Byte),
-      "bytecode" => Type::String(StringPrefix::Bytecode),
-      _ if s.starts_with("@/") => Type::Contract(s.to_string()),
-      _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
-      _ if s.starts_with("abi\"") => {
-        let inner = unescape_str(&s["abi".len()..])?;
-        Type::Abi(ethabi::param_type::Reader::read(&inner).map_err(|_| "parse abi type")?)
-      },
-      _ if s.starts_with("contract\"") => Type::Contract(unescape_str(&s["contract".len()..])?),
-      _ if s.starts_with("int_") => {
-        Type::Number(s[4..].parse().map_err(|_| "parse number suffix")?)
-      },
-      _ if s.starts_with("[") && s.ends_with("]") => {
-        let a = s[1..s.len()-1].rsplitn(2, ";").collect::<Vec<_>>();
-        if a.len() != 2 {
-          return Err("parse fixed_array args len")
-        }
-        Type::FixedArray(
-          Box::new(a[1].trim().parse().map_err(|_| "parse fixed_array inner type")?),
-          a[0].trim().parse().map_err(|_| "parse fixed_array count")?,
-        )
-      }
-      _ => {
-        warn!("unknown type {}", s);
-        return Err("unknown type")
-      }
+    use pest::Parser;
+    let mut pairs = ast::AstParser::parse(ast::Rule::r#type, s).map_err(|_| "parsing")?;
+    let result = if let Some(pair) = pairs.next() {
+      assert_eq!(pair.as_rule(), ast::Rule::r#type);
+      let lit = ast::parse_type(pair).map_err(|_| "ast")?;
+      typing::parse_type(&lit).map_err(|_| "typing")?
+    } else {
+      return Err("parsed nothing")
     };
+    if pairs.next().is_some() {
+      return Err("more than one token")
+    }
     Ok(result)
   }
 }
@@ -257,41 +212,41 @@ impl ValueKind {
   pub fn parse_str(s: &str, ty: &Type) -> Result<Self, &'static str> {
     trace!("value parse_str {} {}", s, ty);
     let result = match ty {
-      Type::NoneType => return Ok(Self::Bytes(vec![])),
+      Type::NoneType => Self::Bytes(vec![]),
       Type::Global(_) => todo!(),
       Type::ContractType(_) => todo!(),
       Type::Contract(_) => todo!(),
       Type::Abi(_) => todo!(),
       Type::Bool => match s {
-        "true" => return Ok(Self::Bool(true)),
-        "false" => return Ok(Self::Bool(false)),
-        _ => {},
+        "true" => Self::Bool(true),
+        "false" => Self::Bool(false),
+        _ => return Err("unknown bool"),
       },
-      Type::String(StringPrefix::None) => return Ok(Self::String(unescape_str(s)?)),
+      Type::String(StringPrefix::None) => Self::String(unescape_str(s)?),
       Type::String(prefix) => {
         let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).unwrap();
         match prefix {
           StringPrefix::None => unreachable!(),
           StringPrefix::Byte | StringPrefix::Hex =>
-            return Ok(Self::Bytes(bytes)),
+            Self::Bytes(bytes),
           StringPrefix::Bytecode => return Ok(Self::Bytecode(bytes)),
           StringPrefix::Key => return Ok(Self::Wallet(LocalWallet::from_bytes(&bytes).unwrap())),
           StringPrefix::Address => {
             let mut b = [0u8; 20];
             b.copy_from_slice(&bytes);
-            return Ok(Self::Address(b.into(), None))
+            Self::Address(b.into(), None)
           }
           StringPrefix::Contract => todo!(),
         }
       }
       Type::Number(suffix) =>
-        return Ok(Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap(), *suffix)),
+        Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap(), *suffix),
       Type::FixedArray(inner, n) => {
         warn!("fixme: parse array");
         let v = s[1..s.len()-1].split(",").map(|i| Self::parse_str(i.trim(), inner.as_ref())).collect::<Result<_, _>>()?;
-        return Ok(Self::FixedArray(v, inner.as_ref().clone(), *n));
+        Self::FixedArray(v, inner.as_ref().clone(), *n)
       },
     };
-    Err("cannot convert")
+    Ok(result)
   }
 }

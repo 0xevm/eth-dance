@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::ast::{TypeLit, TypeKind, TypePrefix};
 use crate::{
   ast::{Stmt, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Scope, Func, globals, load_abi},
@@ -25,6 +26,8 @@ pub enum Error {
   Path(#[source] std::path::StripPrefixError, String, Span),
   #[error("typing: abi {0:?} path={1} at {2:?}")]
   Abi(#[source] anyhow::Error, String, Span),
+  #[error("typing: abi_type {0:?} at {1:?}")]
+  AbiType(#[source] ethabi::Error, Span),
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
@@ -256,21 +259,23 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
         ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
         _ => unreachable!("expr should must be ident"),
       };
-      if !expr.hint.is_empty() {
-        let hint = if expr.hint.starts_with('@') {
-          expr.hint.trim_start_matches('@')
-        } else { &expr.hint };
-        let contract_id = state.find_name(hint);
-        let contract = contract_id.map(|id| state.get_info(id).ty().clone());
-        trace!("hint: {} => {:?}", expr.hint, contract);
-        match contract {
-          Some(Type::ContractType(s)) =>
-            state.get_info(id).should = Some(Type::Contract(s)),
-          _ => {
-            warn!("fixme: contract not found");
+      if let Some(hint) = &expr.hint {
+        let hint = parse_type(hint)?;
+        match &hint {
+          Type::ContractType(s) => {
+            let contract_id = state.find_name(&s);
+            let contract = contract_id.map(|id| state.get_info(id).ty().clone());
+            trace!("hint: {} => {:?}", hint, contract);
+            match contract {
+              Some(Type::ContractType(s)) =>
+                state.get_info(id).should = Some(Type::Contract(s)),
+              _ => {
+                todo!("fixme: contract not found");
+              }
+            }
           }
+          _ => state.get_info(id).should = Some(hint),
         }
-        warn!("fixme: built-in hint {}", expr.hint);
       }
       id
     }
@@ -279,6 +284,44 @@ pub fn parse_stmt(state: &mut Typing, stmt: &Stmt) -> Result<()> {
   state.get_info(id).expr_span = stmt.rhs.span.clone();
   state.get_info(id).expr = rhs;
   Ok(())
+}
+
+pub fn parse_type(hint: &TypeLit) -> Result<Type> {
+  let ty = match &hint.kind {
+    TypeKind::None => Type::NoneType,
+    TypeKind::Ident(s) => {
+      match s.as_str() {
+        "none" => Type::NoneType,
+        "bool" => Type::Bool,
+        "string" => Type::String(StringPrefix::None),
+        "address" => Type::String(StringPrefix::Address),
+        "wallet" => Type::String(StringPrefix::Key),
+        "bytes" => Type::String(StringPrefix::Byte),
+        "bytecode" => Type::String(StringPrefix::Bytecode),
+        _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
+        _ if s.starts_with("int_") => {
+          let suffix = &s["int_".len()..];
+          let suffix = suffix.parse().map_err(|_| Error::NameNotFound(suffix.to_string(), hint.span.clone()))?;
+          Type::Number(suffix)
+        },
+        _ => return Err(Error::NameNotFound(s.to_string(), hint.span.clone())),
+      }
+    },
+    TypeKind::String(s, prefix) => {
+      match prefix {
+        TypePrefix::None => Type::Contract(s.to_string()),
+        TypePrefix::Contract => Type::ContractType(s.to_string()),
+        TypePrefix::Abi => {
+          Type::Abi(ethabi::param_type::Reader::read(&s).map_err(|e| Error::AbiType(e, hint.span.clone()))?)
+        },
+    }
+    },
+    TypeKind::Array(ty, size) => {
+      let inner = parse_type(&ty)?;
+      Type::FixedArray(Box::new(inner), size.unwrap())
+    },
+};
+  Ok(ty)
 }
 
 pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {

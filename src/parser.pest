@@ -34,7 +34,10 @@ expr = {
   fixed_array |
   ident
 }
-type = @{ ident | string }
+type = {
+  string | ident |
+  "[" ~ type ~ (";" ~ int)? ~ "]"
+}
 
 WHITESPACE = _{ " " | "\t" }
 COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
