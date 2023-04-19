@@ -261,7 +261,9 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
   let mut pairs = AstParser::parse(Rule::FILE, input)?;
   if let Some(pair) = pairs.next() {
     match pair.as_rule() {
-      Rule::FILE => parse_file(pair),
+      Rule::FILE => {
+        parse_block(pair.into_inner().next().unwrap())
+      },
       // Rule::COMMENT => continue,
       _ => unreachable!(),
     }
@@ -270,7 +272,8 @@ pub fn parse(input: &str) -> Result<Vec<Stmt>>  {
   }
 }
 
-fn parse_file(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
+fn parse_block(pair: Pair<Rule>) -> Result<Vec<Stmt>> {
+  assert_eq!(pair.as_rule(), Rule::block);
   let span = pair.as_span().into();
   let pairs = pair.into_inner();
   let mut result = Vec::new();
@@ -449,7 +452,7 @@ pub fn parse_type(pair: Pair<Rule>) -> Result<TypeLit> {
   assert_eq!(pair.as_rule(), Rule::r#type);
   let span: Span = pair.as_span().into();
   let s = pair.as_str().trim();
-  warn!("parse_type: {}", s);
+  trace!("parse_type: {}", s);
   let mut pairs = pair.into_inner();
   let kind = if s.starts_with("[") {
     let pair = pairs.next().expect("pairs: type('[') => type");

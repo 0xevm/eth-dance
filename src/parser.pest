@@ -1,5 +1,5 @@
-FILE = { SOI ~ (statement? ~ NEWLINE)* ~ EOI }
-statement = { (item ~ "=")? ~ expr }
+FILE = ${ SOI ~ block ~ EOI }
+statement = !{ (item ~ "=")? ~ expr }
 dot = { ":" | "." }
 
 args = { arg ~ ("," ~ arg)* }
@@ -25,6 +25,11 @@ byte       = { "x" ~ ASCII_HEX_DIGIT{2} }
 unicode    = { "u" ~ "{" ~ ASCII_HEX_DIGIT{1, 6} ~ "}" }
 escape     = { "\\" ~ (predefined | byte | unicode) }
 
+block = ${ (
+  WHITESPACE* ~ COMMENT? ~ NEWLINE |
+  WHITESPACE* ~ statement ~ (!NEWLINE ~ WHITESPACE)* ~ COMMENT? ~ NEWLINE
+)* }
+
 item = { ident ~ (":" ~ type)? }
 arg = { expr ~ (":" ~ type)? }
 expr = {
@@ -39,5 +44,5 @@ type = {
   "[" ~ type ~ (";" ~ int)? ~ "]"
 }
 
-WHITESPACE = _{ " " | "\t" }
-COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* }
