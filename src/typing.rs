@@ -9,57 +9,39 @@ use crate::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
-  #[error("typing: {0:?}")]
-  Errors(Vec<Error>),
-  #[error("typing: name not found {0:?} at {1:?}")]
-  NameNotFound(String, Span),
-  #[error("typing: module not contract {0:?} at {1:?}")]
-  ModuleNotContract(Type, Span),
-  #[error("typing: func not found {0}.{1} at {2:?}")]
-  FuncNotFound(String, String, Span),
-  #[error("typing: infer type failed {0}.{1} at {1:?}")]
-  InferTypeFailed(String, String, Span),
-  #[error("typing: io {0:?} path={1} at {2:?}")]
-  Io(#[source] std::io::Error, String, Span),
-  #[error("typing: path {0:?} path={1} at {2:?}")]
-  Path(#[source] std::path::StripPrefixError, String, Span),
-  #[error("typing: abi {0:?} path={1} at {2:?}")]
-  Abi(#[source] anyhow::Error, String, Span),
-  #[error("typing: abi_type {0:?} at {1:?}")]
-  AbiType(#[source] ethabi::Error, Span),
+pub enum ErrorKind {
+  #[error("name not found {0:?}")]
+  NameNotFound(String),
+  #[error("module not contract {0:?}")]
+  ModuleNotContract(Type),
+  #[error("func not found {0}.{1}")]
+  FuncNotFound(String, String),
+  #[error("infer type failed {0}.{1}")]
+  InferTypeFailed(String, String),
+  #[error(transparent)]
+  Io(#[from] std::io::Error),
+  #[error(transparent)]
+  Path(#[from] std::path::StripPrefixError),
+  #[error("abi loading")]
+  Abi(#[source] anyhow::Error),
+  #[error(transparent)]
+  AbiType(#[from] ethabi::Error),
+}
+#[derive(Debug, thiserror::Error)]
+#[error("typing: {message} at {span:?}")]
+pub struct Error {
+  #[source]
+  pub kind: ErrorKind,
+  pub message: String,
+  pub span: Span,
 }
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
-
 impl Error {
-  pub fn inner_errors(self) -> Vec<Self> {
-    match self {
-      Error::Errors(v) => v.into_iter().map(|i| i.inner_errors()).flatten().collect(),
-      _ => vec![self]
-    }
-  }
-  pub fn flatten(self) -> Self {
-    match self {
-      Error::Errors(v) => {
-        Error::Errors(Error::Errors(v).inner_errors())
-      }
-      _ => self
-    }
-
-  }
-  pub fn span(&self) -> Option<Span> {
-    match self {
-      Error::NameNotFound(_, span) |
-      Error::ModuleNotContract(_, span) |
-      Error::FuncNotFound(_, _, span) =>
-        Some(span.clone()),
-      _ => None
-    }
-  }
   pub fn show_pos(&self, input: &str, line_index: Rc<Vec<usize>>) -> String {
     let mut s = String::new();
-    if let Some(span) = self.span() {
+    let span = &self.span;
+    if span.len > 0 {
       let line = match line_index.binary_search(&span.start) {
         Ok(i) => i,
         Err(i) => i.saturating_sub(1),
@@ -68,6 +50,35 @@ impl Error {
       s = format!("{}:{}: {}", line+1, col+1, &input[span.start..span.start+span.len])
     }
     s
+  }
+}
+
+
+impl ErrorKind {
+  fn when(self, span: &Span) -> Error {
+    Error {
+      kind: self, message: String::new(), span: span.clone(),
+      // backtrace: Backtrace::force_capture(),
+    }
+  }
+  fn context<S: ToString>(self, s: S, span: &Span) -> Error {
+    Error {
+      kind: self, message: s.to_string(), span: span.clone(),
+      // backtrace: Backtrace::force_capture(),
+    }
+  }
+}
+
+pub trait ErrorExt<T, E> {
+  fn when(self, span: &Span) -> Result<T>;
+  fn context<S: ToString>(self, s: S, span: &Span) -> Result<T>;
+}
+impl<T, E: Into<ErrorKind>> ErrorExt<T, E> for Result<T, E> {
+  fn when(self, span: &Span) -> Result<T> {
+    self.map_err(|e| e.into().when(span))
+  }
+  fn context<S: ToString>(self, s: S, span: &Span) -> Result<T> {
+    self.map_err(|e| e.into().context(s, span))
   }
 }
 
@@ -237,7 +248,7 @@ impl Typing {
   }
 }
 
-pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<()> {
+pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<(), Vec<Error>> {
   let mut errors = Vec::new();
   for stmt in stmts {
     if let Err(e) = parse_stmt(state, stmt) {
@@ -247,7 +258,7 @@ pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<()> {
   if errors.is_empty() {
     Ok(())
   } else {
-    Err(Error::Errors(errors))
+    Err(errors)
   }
 }
 pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
@@ -313,10 +324,10 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
         _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
         _ if s.starts_with("int_") => {
           let suffix = &s["int_".len()..];
-          let suffix = suffix.parse().map_err(|_| Error::NameNotFound(suffix.to_string(), hint.span.clone()))?;
+          let suffix = suffix.parse().map_err(|_| ErrorKind::NameNotFound(suffix.to_string())).when(&hint.span)?;
           Type::Number(suffix)
         },
-        _ => return Err(Error::NameNotFound(s.to_string(), hint.span.clone())),
+        _ => return Err(ErrorKind::NameNotFound(s.to_string()).when(&hint.span)),
       }
     },
     TypeKind::String(s, prefix) => {
@@ -324,7 +335,7 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
         TypePrefix::None => Type::Contract(s.to_string()),
         TypePrefix::Contract => Type::ContractType(s.to_string()),
         TypePrefix::Abi => {
-          Type::Abi(ethabi::param_type::Reader::read(&s).map_err(|e| Error::AbiType(e, hint.span.clone()))?)
+          Type::Abi(ethabi::param_type::Reader::read(&s).when(&hint.span)?)
         },
     }
     },
@@ -347,7 +358,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
           result.returns = state.get_info(dst).ty().clone();
           result.code = ExprCode::Expr(dst);
         },
-        None => return Err(Error::NameNotFound(i.to_string(), i.span.clone()))
+        None => return Err(ErrorKind::NameNotFound(i.to_string()).when(&span))
       }
     },
     ExprKind::Funccall(i) => {
@@ -370,10 +381,10 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
         Path::new(&state.current_file).parent().unwrap().join(&path).canonicalize()
       } else {
         Path::new(&state.working_dir).join(&path.strip_prefix("@/").unwrap()).canonicalize()
-      }.map_err(|e| Error::Io(e, path.clone(), span.clone()))?;
-      let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).map_err(|e| Error::Path(e, path.clone(), span.clone()))?.to_string_lossy());
-      let content = std::fs::read_to_string(real_path).map_err(|e| Error::Io(e, resolved_path.clone(), span.clone()))?;
-      let module = load_abi(&resolved_path, &content).map_err(|e| Error::Abi(e, resolved_path.clone(), span.clone()))?;
+      }.context(&path, &span)?;
+      let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).context(&path, &span)?.to_string_lossy());
+      let content = std::fs::read_to_string(real_path).context(&resolved_path, &span)?;
+      let module = load_abi(&resolved_path, &content).map_err(ErrorKind::Abi).context(&resolved_path, &span)?;
       let id = state.add_module(module);
       result.returns = Type::ContractType(resolved_path);
       result.code = ExprCode::Expr(id);
@@ -441,14 +452,14 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let module_str = match module_ty {
     Type::Global(name) => name.to_string(),
     Type::Contract(name) => name.clone(),
-    _ => return Err(Error::ModuleNotContract(module_ty, i.span.clone())),
+    _ => return Err(ErrorKind::ModuleNotContract(module_ty).when(&i.span)),
   };
 
   let name = i.name.to_string();
   let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
   let (module_str, name) = if module_str == "@Global" && name == "deploy" {
     if args.is_empty() {
-      return Err(Error::InferTypeFailed(module_str, "deploy:this".to_string(), i.span.clone()))
+      return Err(ErrorKind::InferTypeFailed(module_str, "deploy:this".to_string()).when(&i.span.clone()))
     }
     let this_arg = args.remove(0);
     this = match this_arg.code {
@@ -472,7 +483,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   }
   let func = match state.modules.get(&module_str).and_then(|i| i.select(&name, &arg_types)) {
     Some(func) => func,
-    None => return Err(Error::InferTypeFailed(module_str, name, i.span.clone()))
+    None => return Err(ErrorKind::InferTypeFailed(module_str, name).when(&i.span))
   };
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));

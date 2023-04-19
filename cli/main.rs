@@ -6,8 +6,8 @@ use anyhow::Result;
 use clap::Parser;
 use eth_dance::{
   ast,
-  typing::{self, Typing, Type},
-  vm::{self, VM}, out
+  typing::{self, Typing},
+  vm::{self, VM, ValueKind}, out
 };
 
 #[derive(clap::Parser)]
@@ -44,7 +44,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
     Ok(result) => result,
     Err(e) => {
       let line_index = Rc::new(input.lines().map(|i| i.as_ptr() as usize - input.as_ptr() as usize).collect::<Vec<_>>());
-      for i in e.inner_errors() {
+      for i in e {
         error!("typing error: {}\n{:?}", i.show_pos(&input, line_index.clone()), i);
       }
       anyhow::bail!("typing failed")
@@ -65,18 +65,12 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   debug!("last_id: {:?}", state.last_id);
   result?;
   for (name, id) in &state.found {
-    // warn!("name: {} {:?}", name, id);
-    // let value = vm.get_value(id).unwrap();
-    // match value.ty {
-    //   Some(Type::ContractType(_)) => {
-    //     if let ethabi::Token::Bytes(i) = &value.token {
-    //       info!("vm: {:?} = [{}] hash={} len={}", name, value.abi, ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
-    //       continue;
-    //     }
-    //   }
-    //   _ => {},
-    // }
-    // info!("vm: {:?} = [{}] {}", name, value.abi, value.token);
+    let value = vm.get_value(*id).unwrap();
+    if let ValueKind::Bytecode(i) = value {
+      info!("vm: {:?}({}) = <{}> hash={} len={}", name, id, "bytecode", ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
+      continue;
+    }
+    info!("vm: {:?}({}) = <{}> {}", name, id, value.ty(), value.value_str());
   }
   let cache = out::cache::from_vm(&vm, &state);
   std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
