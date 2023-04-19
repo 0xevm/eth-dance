@@ -154,13 +154,16 @@ impl std::fmt::Display for ExprCode {
           None => f.write_str(&format!("{}{}{}({})", func.ns, dot, func.name, args_str)),
         }
       }
-      ExprCode::Expr(arg0) => write!(f, "{}", arg0),
+      ExprCode::Convert(arg0, Some(arg1)) => write!(f, "{} as {}", arg0, arg1),
+      ExprCode::Convert(arg0, None) => write!(f, "{}", arg0),
       ExprCode::String(arg0) => write!(f, "{}", arg0),
       ExprCode::Number(arg0) => write!(f, "{}", arg0),
       ExprCode::List(arg0) => {
         let s = arg0.iter().map(ToString::to_string).collect::<Vec<_>>();
         write!(f, "[{}]", s.join(","))
       },
+      ExprCode::Loop(arg0, arg1) => write!(f, "loop: {} => {}", arg0, arg1),
+      ExprCode::EndLoop(arg0) => write!(f, "end_loop: {}", arg0),
     }
   }
 }
@@ -189,6 +192,9 @@ impl FromStr for ValueKind {
   type Err = &'static str;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
+    if s == "()" {
+      return Ok(Self::Tuple(vec![]))
+    }
     if s.starts_with("(") && s.ends_with(")") {
       todo!()
     }

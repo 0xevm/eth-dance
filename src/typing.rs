@@ -10,14 +10,6 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
-  #[error("name not found {0:?}")]
-  NameNotFound(String),
-  #[error("module not contract {0:?}")]
-  ModuleNotContract(Type),
-  #[error("func not found {0}.{1}")]
-  FuncNotFound(String, String),
-  #[error("infer type failed {0}.{1}")]
-  InferTypeFailed(String, String),
   #[error(transparent)]
   Utf8(#[from] std::string::FromUtf8Error),
   #[error(transparent)]
@@ -28,6 +20,16 @@ pub enum ErrorKind {
   Abi(#[source] anyhow::Error),
   #[error(transparent)]
   AbiType(#[from] ethabi::Error),
+  #[error("name not found {0:?}")]
+  NameNotFound(String),
+  #[error("module not contract {0:?}")]
+  ModuleNotContract(Type),
+  #[error("func not found {0}.{1}")]
+  FuncNotFound(String, String),
+  #[error("infer type failed {0}.{1}")]
+  InferTypeFailed(String, String),
+  #[error("loop: {0}")]
+  Loop(String),
 }
 #[derive(Debug, thiserror::Error)]
 #[error("typing: {message} at {span:?}")]
@@ -133,11 +135,12 @@ impl Type {
 pub enum ExprCode {
   #[default] None,
   Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
-  Expr(Id),
+  Convert(Id, Option<Type>),
   String(TypedString),
   Number(TypedNumber),
   List(Vec<ExprCode>),
-  // Next(Id),
+  Loop(Id, Id),
+  EndLoop(Id),
 }
 
 #[derive(Debug, Default)]
@@ -181,12 +184,20 @@ impl Scopes {
       stack: vec![init], scopes, symbols: Default::default(), latest: Default::default(),
     }
   }
-  pub fn insert(&mut self, name: String, id: Id) {
+  pub fn insert(&mut self, name: String, id: Id) -> Result<(), ErrorKind> {
     let current = *self.stack.last().unwrap();
     let current_scope = self.scopes.get_mut(&current).unwrap();
     current_scope.insert(name.to_string(), id);
     self.symbols.entry(name.to_string()).or_insert((current, id));
     self.latest.insert(name.to_string(), id);
+    Ok(())
+  }
+  pub fn enter_scope(&mut self, id: Id) {
+    self.scopes.insert(id, Default::default());
+    self.stack.push(id);
+  }
+  pub fn exit_scope(&mut self) {
+    self.stack.pop();
   }
 }
 
@@ -245,8 +256,8 @@ impl Typing {
     }
   }
 
-  pub fn add_module(&mut self, contract: Module) -> Id {
-    let id = self.new_id();
+  pub fn add_module(&mut self, contract: Module, span: &Span) -> Id {
+    let id = self.new_id(span);
     self.infos.entry(id).or_default();
     // self.scopes.insert(contract.name.to_string(), id);
     // self.get_info(id).display = name.to_string();
@@ -259,8 +270,11 @@ impl Typing {
     id
   }
 
-  pub fn new_id(&mut self) -> Id {
+  pub fn new_id(&mut self, span: &Span) -> Id {
     let id = Id(self.last_id.0+1, 0);
+    self.infos.entry(id).or_default();
+    self.get_info(id).span = span.clone();
+    self.get_info(id).keys = self.scopes.stack.clone();
     self.last_id = id;
     id
   }
@@ -278,32 +292,20 @@ impl Typing {
   }
 
   pub fn insert_expr(&mut self, expr: Expression) -> Id {
-    let id = self.insert_name("", expr.span.clone());
+    let id = self.new_id(&expr.span);
     trace!("insert expr: {:?} {:?}", id, expr.code);
     self.get_info(id).expr = expr;
     id
   }
 
-  pub fn insert_name(&mut self, name: &str, span: Span) -> Id {
+  pub fn insert_name(&mut self, name: &str, span: &Span) -> Result<Id, Error> {
+    let id = self.new_id(span);
     if name == "" {
-      let id = self.new_id();
-      self.infos.entry(id).or_default();
-      self.get_info(id).display = format!("$${}", id.0);
-      self.get_info(id).span = span;
-      return id
+      return Ok(id)
     }
-    // if name.starts_with("$") {
-    //   if let Some(id) = self.found.get(name).copied() {
-    //     return id
-    //   }
-    // }
-
-    let id = self.new_id();
-    self.infos.entry(id).or_default();
     self.get_info(id).display = name.to_string();
-    self.get_info(id).span = span;
-    self.scopes.insert(name.to_string(), id);
-    id
+    self.scopes.insert(name.to_string(), id).when(span)?;
+    Ok(id)
   }
 }
 
@@ -350,7 +352,7 @@ pub fn parse_stmt_types(state: &mut Typing, stmt: &StmtKind) -> Result<bool> {
           warn!("fixme: check resolved path in moduels {}", resolved_path);
           let content = std::fs::read_to_string(real_path).context(&resolved_path, &span)?;
           let module = load_abi(&resolved_path, &content).map_err(ErrorKind::Abi).context(&resolved_path, &span)?;
-          let id = state.add_module(module);
+          let id = state.add_module(module, &stmt.rhs.span);
           (Type::ContractType(resolved_path), id)
         }
         _ => return Ok(false)
@@ -362,18 +364,28 @@ pub fn parse_stmt_types(state: &mut Typing, stmt: &StmtKind) -> Result<bool> {
         };
         state.get_info(id).should = Some(ty);
         state.get_info(id).display = name.to_string();
-        state.scopes.insert(name, id);
+        state.scopes.insert(name, id).when(&lhs.span)?;
       }
       Ok(true)
     }
+    StmtKind::Forloop(Forloop { stmts, .. }) => {
+      for i in stmts {
+        parse_stmt_types(state, i)?;
+      };
+      Ok(false)
+    }
     StmtKind::Comment(_) => Ok(true),
-    _ => Ok(false),
   }
 }
 pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
   match stmt {
     StmtKind::Assignment(stmt) => parse_assignment(state, stmt),
-    StmtKind::Forloop(stmt) => parse_forloop(state, stmt),
+    StmtKind::Forloop(stmt) => {
+      let old_stack = state.scopes.stack.clone();
+      let result = parse_forloop(state, stmt);
+      state.scopes.stack = old_stack;
+      result
+    }
     StmtKind::Comment(_) => Ok(()),
   }
 }
@@ -384,6 +396,32 @@ pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
 /// $$3 end
 fn parse_forloop(state: &mut Typing, stmt: &Forloop) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
+  let item_ty = match &rhs.returns {
+    Type::FixedArray(ty, _) => ty.as_ref().clone(),
+    _ => return Err(ErrorKind::Loop(format!("rhs.returns not a iterator {}", rhs.returns)).when(&stmt.span)),
+  };
+  let range_id = state.insert_expr(rhs);
+  let name = match &stmt.lhs.inner {
+    ExprKind::Ident(i) => i.to_string(),
+    _ => unreachable!(),
+  };
+  state.scopes.enter_scope(range_id);
+  let loop_id = state.insert_name(&name, &stmt.lhs.span)?;
+  for i in &stmt.stmts {
+    parse_stmt(state, i)?;
+  }
+  let end_id = state.new_id(&stmt.span);
+  state.get_info(loop_id).expr = Expression {
+    returns: item_ty,
+    code: ExprCode::Loop(range_id, end_id),
+    span: stmt.span.clone(),
+  };
+  state.get_info(end_id).expr = Expression {
+    returns: Type::NoneType,
+    code: ExprCode::EndLoop(loop_id),
+    span: stmt.span.clone(),
+  };
+  state.scopes.exit_scope(); // TODO: ensure exit?
   Ok(())
 }
 
@@ -392,7 +430,7 @@ pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
   let id = match &stmt.lhs {
     Some(expr) => {
       let id = match &expr.inner {
-        ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), ident.span.clone()),
+        ExprKind::Ident(ident) => state.insert_name(&ident.to_string(), &ident.span)?,
         _ => unreachable!("expr should must be ident"),
       };
       if let Some(hint) = &expr.hint {
@@ -415,7 +453,7 @@ pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
       }
       id
     }
-    None => state.insert_name(&String::new(), stmt.span.clone())
+    None => state.new_id(&stmt.span)
   };
   state.get_info(id).expr_span = stmt.rhs.span.clone();
   state.get_info(id).expr = rhs;
@@ -463,12 +501,16 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
 pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
   let span = expr.span.clone();
   let mut result = Expression::default();
+  let hint_ty = match &expr.hint {
+    Some(hint) => Some(parse_type(hint)?),
+    None => None,
+  };
   match &expr.inner {
     ExprKind::Ident(i) => {
       match state.find_name(&i.to_string()) {
         Some(dst) => {
           result.returns = state.get_info(dst).ty().clone();
-          result.code = ExprCode::Expr(dst);
+          result.code = ExprCode::Convert(dst, hint_ty);
         },
         None => return Err(ErrorKind::NameNotFound(i.to_string()).when(&span))
       }
@@ -516,7 +558,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
             match inner.code {
               ExprCode::Func { .. } => {
                 let id = state.insert_expr(inner);
-                codes.push(ExprCode::Expr(id))
+                codes.push(ExprCode::Convert(id, ty.clone()))
               },
               _ => codes.push(inner.code),
             }
@@ -563,7 +605,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
     }
     let this_arg = args.remove(0);
     this = match this_arg.code {
-      ExprCode::Expr(i) => Some(i),
+      ExprCode::Convert(i, _) => Some(i),
       _ => todo!(),
     };
     let module_str = match this_arg.returns {

@@ -8,7 +8,7 @@ pub fn to_ir(typing: &Typing) -> Vec<String> {
       None => String::new(),
     };
     let mut s = format!("{}{} = {}", id, abi_str, info.expr.code);
-    if !info.display.starts_with("$$") {
+    if !info.display.is_empty() {
       let comment = format!("# {}: {}", info.display, info.ty());
       s = format!("{}\n{}", comment, s);
     }

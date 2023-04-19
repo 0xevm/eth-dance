@@ -55,7 +55,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   std::fs::write(format!("{}/ir.txt", opts.out), ir.join("\n\n"))?;
 
   let mut vm = VM::new();
-  let result = vm::execute(&mut vm, &state);
+  let result = vm::execute(&mut vm, &state, None, None);
   for (id, value) in &vm.builtin {
     debug!("vm: {:?} = {:?}", id, value);
   }
@@ -65,7 +65,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   debug!("last_id: {:?}", state.last_id);
   result?;
   for (name, id) in &state.scopes.latest {
-    let value = vm.get_value(*id).unwrap();
+    let Some(value) = vm.get_value(*id) else { continue };
     if let ValueKind::Bytecode(i) = value {
       info!("vm: {:?}({}) = <{}> hash={} len={}", name, id, "bytecode", ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
       continue;

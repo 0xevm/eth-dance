@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use anyhow::bail;
 use bigdecimal::ToPrimitive;
 use ethabi::{Token, ParamType};
 use ethers::{
@@ -72,11 +73,26 @@ impl ValueKind {
       ValueKind::Wallet(_) => Type::String(StringPrefix::Key),
       ValueKind::String(_) => Type::String(StringPrefix::None),
       ValueKind::Bytes(_) => Type::String(StringPrefix::Byte),
-      ValueKind::Bytecode(_) => todo!(),
+      ValueKind::Bytecode(_) => Type::String(StringPrefix::Bytecode),
       ValueKind::FixedArray(_, sub_ty, n) => Type::FixedArray(Box::new(sub_ty.clone()), *n),
       ValueKind::Array(_, _) => todo!(),
+      ValueKind::Tuple(i) if i.is_empty() => Type::NoneType,
       ValueKind::Tuple(_) => todo!(),
     }
+  }
+  fn as_ty(self, ty: &Type) -> Result<ValueKind, ValueKind> {
+    trace!("convert {} => {}", self.ty(), ty);
+    if &self.ty() == ty {
+      return Ok(self)
+    }
+    let result = match (self, ty) {
+      (ValueKind::Number(base, _), Type::Number(suffix)) => ValueKind::Number(base, *suffix),
+      (value, _) => {
+        warn!("unknown convert {} {}", value.ty(), ty);
+        return Err(value)
+      }
+    };
+    Ok(result)
   }
 }
 
@@ -173,7 +189,7 @@ impl ExprCode {
       let id_1_str = c.get(3).map(|i| i.as_str()).unwrap_or("0");
       let id_1 = id_1_str.parse::<u64>().unwrap();
       let id = Id(id_0, id_1);
-      match vm.values.get(&id) {
+      match vm.get_value(id) {
         Some(a) => a.show(),
         None => format!("~{}~", id),
       }
@@ -189,33 +205,61 @@ impl ExprCode {
   }
 }
 
-pub fn execute(vm: &mut VM, typing: &Typing) -> Result<()> {
-  for (id, info) in &typing.infos {
+pub fn execute(vm: &mut VM, typing: &Typing, start: Option<Id>, end: Option<Id>) -> Result<()> {
+  let mut skipping = Id(0, 0);
+  info!("execute: {:?} {:?}", start, end);
+  let code_range = typing.infos.iter()
+    .skip_while(|(id, _)| start.is_some() && **id <= start.unwrap()) // <= means exclude start
+    .take_while(|(id, _)| end.is_none() || **id < end.unwrap()); // < means exlude end
+  for (id, info) in code_range {
+    if *id < skipping { continue }
     debug!("code: {} <- {}", id, info.expr.code.show_var(vm));
-    match &info.expr.code {
+    let value = match &info.expr.code {
       ExprCode::None => {
-        warn!("expr is none: {:?}", id)
+        warn!("expr is none: {:?}", id);
+        continue
+      },
+      ExprCode::Loop(scope, stop) => {
+        skipping = *stop;
+        let Some(range) = vm.get_value(*scope).cloned() else {
+          bail!("scope range {} not present", scope);
+        };
+        match range {
+          ValueKind::Array(arr, ty) |
+          ValueKind::FixedArray(arr, ty, _) => {
+            for item in arr {
+              vm.set_value(*id, info, item)?;
+              execute(vm, typing, Some(*id), Some(*stop))?;
+            }
+          }
+          _ => bail!("scope range {} not iteratable: {}", scope, range.ty()),
+        }
+        continue
       }
-      _ => {},
-    }
-    let value = execute_impl(vm, typing, &info.expr.code, Some(&info.ty()))?;
+      ExprCode::EndLoop(_) => {
+        continue
+      }
+      _ => execute_impl(vm, typing, &info.expr.code, Some(&info.ty()))?,
+    };
     vm.set_value(*id, info, value)?;
   }
   Ok(())
 }
 
 fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>) -> Result<ValueKind> {
-  match &code {
-    ExprCode::None => {
-      todo!()
-    }
-    ExprCode::Expr(i) => {
+  let value = match &code {
+    ExprCode::Convert(i, ty) => {
       let value = if let Some(value) = vm.get_value(*i) {
         value.clone()
       } else {
         anyhow::bail!("vm: copy value from {:?} failed", i);
       };
-      return Ok(value)
+      match ty {
+        Some(ty) => match value.as_ty(ty) {
+          Ok(i) | Err(i) => i
+        }
+        None => value,
+      }
     }
     ExprCode::Func { func, this, args, send } => {
       let args = args.iter().map(|i| vm.get_value(*i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
@@ -227,34 +271,30 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
           _ => anyhow::bail!("vm: contract bytecode not present"),
         };
         let result = deploy_contract(vm, func.clone(), bytecode, &args)?;
-        return Ok(result.unwrap().into());
+        result.unwrap().into()
       } else if !func.ns.starts_with("@/") {
-        let result = call_global(vm, func.clone(), &args)?;
-        return Ok(result);
+        call_global(vm, func.clone(), &args)?
       } else if let Some(this) = this {
         let this_addr = match vm.get_value(*this) {
           Some(ValueKind::Address(address, _)) => *address,
           _ => anyhow::bail!("vm: this not address")
         };
         trace!("this_addr: {:?} {:?}", this, this_addr);
-        let result = if *send {
+        if *send {
           send_tx(vm, this_addr, func.clone(), &args)?;
-          ValueKind::Bytes(Vec::new())
+          ValueKind::Tuple(Vec::new())
         } else {
           call_tx(vm, this_addr, func.clone(), &args, ty)?
-        };
-        return Ok(result)
+        }
       } else {
         unreachable!()
       }
     }
     ExprCode::Number(number) => {
-      let value = ValueKind::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?;
-      return Ok(value)
+      ValueKind::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?
     }
     ExprCode::String(string) => {
-      let value = ValueKind::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?;
-      return Ok(value)
+      ValueKind::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?
     }
     ExprCode::List(list) => {
       let mut values = Vec::new();
@@ -270,12 +310,19 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
         }
         values.push(value)
       }
-      Ok(ValueKind::FixedArray(values, sub_ty.unwrap_or_default(), list.len()))
+      ValueKind::FixedArray(values, sub_ty.unwrap_or_default(), list.len())
     },
-    // _ => {
-    //   warn!("skip {:?} => {:?}", id, info.expr.returns)
-    // }
-  }
+    _ => {
+      warn!("skip {:?}: {:?}", ty, code);
+      ValueKind::Tuple(vec![])
+    }
+  };
+  Ok(match ty {
+    Some(ty) => match value.as_ty(ty) {
+      Ok(i) | Err(i) => i
+    }
+    None => value,
+  })
 }
 
 fn call_global(_vm: &VM, func: Func, args: &[&ValueKind]) -> Result<ValueKind> {
