@@ -81,25 +81,31 @@ impl ValueKind {
 }
 
 pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
-pub struct VM {
-  pub values: BTreeMap<Id, ValueKind>,
-  pub builtin: BTreeMap<String, ValueKind>,
+
+#[derive(Debug, Default)]
+pub struct BuiltIn {
   pub wallet: Option<LocalWallet>,
   pub confirm_interval: Option<f64>,
+}
+pub struct VM {
+  pub generation: BTreeMap<Id, Id>,
+  pub values: BTreeMap<Id, ValueKind>,
+  pub builtin: BTreeMap<String, Id>,
+  pub state: BuiltIn,
   pub provider: Provider,
 }
 
 impl VM {
   pub fn new() -> Self {
     Self {
+      generation: Default::default(),
       values: Default::default(),
       builtin: Default::default(),
-      wallet: None,
-      confirm_interval: None,
+      state: Default::default(),
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
-  pub fn set_builtin(&mut self, name: &str, value: &ValueKind) {
+  pub fn set_builtin(&mut self, name: &str, id: Id, value: &ValueKind) {
     match name {
       "$endpoint" => match &value {
         ValueKind::String(s) => {
@@ -109,31 +115,41 @@ impl VM {
       }
       "$account" => match &value {
         ValueKind::Wallet(wallet) => {
-          self.wallet = Some(wallet.clone());
+          self.state.wallet = Some(wallet.clone());
         }
         _ => unreachable!()
       }
       "$confirm_interval" => match &value {
         ValueKind::Number(number, _) => {
-          self.confirm_interval = Some(number.to_f64().unwrap());
+          self.state.confirm_interval = Some(number.to_f64().unwrap());
         }
         _ => unreachable!()
       }
       _ => warn!("unknown builtin name {}", name)
     };
-    self.builtin.insert(name.to_string(), value.clone());
+    self.builtin.insert(name.to_string(), id);
+  }
+  pub fn get_value(&self, id: Id) -> Option<&ValueKind> {
+    if let Some(id) = self.generation.get(&id) {
+      self.values.get(id)
+    } else {
+      self.values.get(&id)
+    }
   }
   pub fn set_value(&mut self, id: Id, info: &Info, value: ValueKind) -> Result<()> {
     trace!("set_value: {} = {}", id, value.show());
     // let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
-      self.set_builtin(&info.display, &value);
+      self.set_builtin(&info.display, id, &value);
     }
+    let latest = self.generation.entry(Id(id.0, 0)).or_insert(id);
+    let id = Id(id.0, latest.1+1);
+    self.generation.insert(Id(id.0, 0), id);
     self.values.insert(id, value);
     Ok(())
   }
   // pub fn get_address(&self, id: Id) -> Option<Address> {
-  //   match self.values.get(&id)?.token {
+  //   match self.get_value(&id)?.token {
   //     Token::Address(addr) => Some(addr),
   //     _ => None,
   //   }
@@ -153,15 +169,18 @@ impl ExprCode {
   pub fn show_var(&self, vm: &VM) -> String {
     const MAX_LEN: usize = 500;
     let expand = |c: &regex::Captures| -> String {
-      let id = Id(c.get(1).unwrap().as_str().parse::<u64>().unwrap());
+      let id_0 = c.get(1).unwrap().as_str().parse::<u64>().unwrap();
+      let id_1_str = c.get(3).map(|i| i.as_str()).unwrap_or("0");
+      let id_1 = id_1_str.parse::<u64>().unwrap();
+      let id = Id(id_0, id_1);
       match vm.values.get(&id) {
         Some(a) => a.show(),
         None => format!("~{}~", id),
       }
     };
-    let re = regex::Regex::new(r"\$\$(\d+)").unwrap();
+    let re = regex::Regex::new(r"\$\$(\d+)(\[(\d+)\])?").unwrap();
     let code_str = self.to_string();
-    let code_str = re.replace(&code_str, expand);
+    let code_str = re.replace_all(&code_str, expand);
     if code_str.len() > MAX_LEN {
       code_str[..MAX_LEN].to_string() + "..."
     } else {
@@ -191,7 +210,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       todo!()
     }
     ExprCode::Expr(i) => {
-      let value = if let Some(value) = vm.values.get(i) {
+      let value = if let Some(value) = vm.get_value(*i) {
         value.clone()
       } else {
         anyhow::bail!("vm: copy value from {:?} failed", i);
@@ -199,11 +218,11 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       return Ok(value)
     }
     ExprCode::Func { func, this, args, send } => {
-      let args = args.iter().map(|i| vm.values.get(i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
+      let args = args.iter().map(|i| vm.get_value(*i)).collect::<Option<Vec<_>>>().ok_or_else(|| anyhow::format_err!("vm: args no present"))?;
       if func.name == "constructor" && *send {
         let this = this.unwrap();
         trace!("contract name {}", &func.ns);
-        let bytecode = match vm.values.get(&this) {
+        let bytecode = match vm.get_value(this) {
           Some(ValueKind::Bytecode(bytes)) => bytes,
           _ => anyhow::bail!("vm: contract bytecode not present"),
         };
@@ -213,7 +232,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
         let result = call_global(vm, func.clone(), &args)?;
         return Ok(result);
       } else if let Some(this) = this {
-        let this_addr = match vm.values.get(this) {
+        let this_addr = match vm.get_value(*this) {
           Some(ValueKind::Address(address, _)) => *address,
           _ => anyhow::bail!("vm: this not address")
         };
@@ -274,13 +293,13 @@ fn call_global(_vm: &VM, func: Func, args: &[&ValueKind]) -> Result<ValueKind> {
 
 #[tokio::main]
 async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<TransactionReceipt>> {
-  if let Some(wallet) = &vm.wallet {
+  if let Some(wallet) = &vm.state.wallet {
     tx = tx.from(wallet.address());
     // wallet.sign_transaction_sync(&tx)?;
   }
   let pending = vm.provider.send_transaction(tx, None).await?;
   trace!("pending: {:?}", pending);
-  let pending = if let Some(i) = vm.confirm_interval {
+  let pending = if let Some(i) = vm.state.confirm_interval {
     pending.interval(std::time::Duration::from_secs_f64(i))
   } else {
     pending
@@ -290,7 +309,7 @@ async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<T
 
 #[tokio::main]
 async fn do_call_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<ethabi::Bytes> {
-  if let Some(wallet) = &vm.wallet {
+  if let Some(wallet) = &vm.state.wallet {
     tx = tx.from(wallet.address());
     // wallet.sign_transaction_sync(&tx)?;
   }

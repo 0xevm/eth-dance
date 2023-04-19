@@ -2,7 +2,7 @@ FILE = ${ SOI ~ block ~ EOI }
 statement = !{ forloop | assignment }
 assignment = { (item ~ "=")? ~ expr }
 forloop = {
-  "for" ~ ident ~ "in" ~ expr ~ "{"
+  "for" ~ item ~ "in" ~ expr ~ "{"
     ~ block ~
   "}"
 }

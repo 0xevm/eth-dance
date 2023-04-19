@@ -66,7 +66,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   result?;
   for (name, id) in &state.found {
     // warn!("name: {} {:?}", name, id);
-    // let value = vm.values.get(id).unwrap();
+    // let value = vm.get_value(id).unwrap();
     // match value.ty {
     //   Some(Type::ContractType(_)) => {
     //     if let ethabi::Token::Bytes(i) = &value.token {

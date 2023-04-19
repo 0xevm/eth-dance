@@ -1,6 +1,6 @@
 use std::{rc::Rc, string::FromUtf8Error};
 
-use pest::{Parser, iterators::Pair};
+use pest::{Parser, iterators::{Pair, Pairs}};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
@@ -35,13 +35,31 @@ pub type Result<T, E=Error> = std::result::Result<T, E>;
 
 impl ErrorKind {
   fn when(self, at: &Span, rule: Rule) -> Error {
-    Error { kind: self, message: String::new(), at: Some(at.clone()), rule, }
+    Error {
+      kind: self, message: String::new(), at: Some(at.clone()), rule,
+      // backtrace: Backtrace::force_capture(),
+    }
   }
   fn when_rule(self, when: Rule, rule: Rule) -> Error {
-    Error { kind: self, message: format!("at rule {:?}", when), at: None, rule, }
+    Error {
+      kind: self, message: format!("at rule {:?}", when), at: None, rule,
+      // backtrace: Backtrace::force_capture(),
+    }
   }
   fn context<S: ToString>(self, s: S, rule: Rule) -> Error {
-    Error { kind: self, message: s.to_string(), at: None, rule, }
+    Error {
+      kind: self, message: s.to_string(), at: None, rule,
+      // backtrace: Backtrace::force_capture(),
+    }
+  }
+}
+
+pub trait ErrorExt2<T> {
+  fn require(self, rule: Rule) -> Result<T, ErrorKind>;
+}
+impl<T> ErrorExt2<T> for Option<T> {
+  fn require(self, rule: Rule) -> Result<T, ErrorKind> {
+    self.ok_or_else(|| ErrorKind::Require(rule))
   }
 }
 pub trait ErrorExt<T, E> {
@@ -115,10 +133,14 @@ pub fn into_inner_pair<T: pest::RuleType>(pair: Pair<T>) -> Result<Pair<T>, Erro
   let Some(pair) = pairs.next() else {
     return Err(ErrorKind::PairCount(0))
   };
+  check_empty(pairs)?;
+  Ok(pair)
+}
+pub fn check_empty<T: pest::RuleType>(pairs: Pairs<T>) -> Result<(), ErrorKind> {
   if pairs.peek().is_some() {
     return Err(ErrorKind::PairCount(pairs.count() + 1))
   };
-  Ok(pair)
+  Ok(())
 }
 
 #[derive(Parser)]
@@ -263,7 +285,7 @@ pub struct TypedString {
 
 #[derive(Debug, Default)]
 pub struct Funccall {
-  pub scope: Ident,
+  pub module: Ident,
   pub dot: Accessor,
   pub name: Ident,
   pub args: Vec<ExprLit>,
@@ -342,15 +364,34 @@ fn parse_block(pair: Pair<Rule>) -> Result<Vec<StmtKind>> {
   drain_error(result).when(&span, Rule::FILE)
 }
 
+// statement = !{ forloop | assignment }
 fn parse_stmt(pair: Pair<Rule>) -> Result<StmtKind> {
   assert_eq!(pair.as_rule(), Rule::statement);
   let span = pair.as_span().into();
   let pair = into_inner_pair(pair).when(&span, Rule::statement)?;
   match pair.as_rule() {
     Rule::assignment => parse_assignment(pair).map(StmtKind::Assignment).when(&span, Rule::statement),
-    _ => unreachable!(),
+    Rule::forloop => parse_forloop(pair).map(StmtKind::Forloop),
+    Rule::COMMENT => Ok(StmtKind::Comment(pair.as_str().to_string())),
+    _ => unreachable!()
   }
-// Rule::forloop => parse_forloop(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
+}
+
+// forloop = {
+//   "for" ~ item ~ "in" ~ expr ~ "{"
+//     ~ block ~
+//   "}"
+// }
+fn parse_forloop(pair: Pair<Rule>) -> Result<Forloop> {
+  let _rule = pair.as_rule();
+  let span = pair.as_span().into();
+  let mut pairs = pair.into_inner();
+  let mut result: Forloop = Forloop::default();
+  result.lhs = parse_item(pairs.next().require(Rule::item).when(&span, _rule)?)?;
+  result.rhs = parse_expr(pairs.next().require(Rule::expr).when(&span, _rule)?)?;
+  result.stmts = parse_block(pairs.next().require(Rule::block).when(&span, _rule)?)?;
+  check_empty(pairs).when(&span, _rule)?;
+  Ok(result)
 }
 
 // statement = { (item ~ "=")? ~ expr }
@@ -433,7 +474,7 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut funccall = Funccall::default();
   funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.scope = parse_ident(pairs.next().expect("pairs: funccall => item"))?;
+    funccall.module = parse_ident(pairs.next().expect("pairs: funccall => item"))?;
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {

@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind};
+use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind, Forloop};
 use crate::{
   ast::{Assignment, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
-  abi::{Scope, Func, globals, load_abi},
+  abi::{Module, Func, globals, load_abi},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -14,8 +14,8 @@ pub enum Error {
   Errors(Vec<Error>),
   #[error("typing: name not found {0:?} at {1:?}")]
   NameNotFound(String, Span),
-  #[error("typing: scope not contract {0:?} at {1:?}")]
-  ScopeNotContract(Type, Span),
+  #[error("typing: module not contract {0:?} at {1:?}")]
+  ModuleNotContract(Type, Span),
   #[error("typing: func not found {0}.{1} at {2:?}")]
   FuncNotFound(String, String, Span),
   #[error("typing: infer type failed {0}.{1} at {1:?}")]
@@ -51,7 +51,7 @@ impl Error {
   pub fn span(&self) -> Option<Span> {
     match self {
       Error::NameNotFound(_, span) |
-      Error::ScopeNotContract(_, span) |
+      Error::ModuleNotContract(_, span) |
       Error::FuncNotFound(_, _, span) =>
         Some(span.clone()),
       _ => None
@@ -149,33 +149,33 @@ impl Info {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Id(pub u64);
+pub struct Id(pub u64, pub u64);
 pub struct Typing {
   pub current_file: PathBuf,
   pub working_dir: PathBuf,
   pub last_id: Id,
   pub infos: BTreeMap<Id, Info>,
-  pub contracts: BTreeMap<String, Scope>,
+  pub modules: BTreeMap<String, Module>,
   pub found: BTreeMap<String, Id>,
 }
 
 impl Typing {
   pub fn new(current_file: PathBuf, working_dir: PathBuf) -> Self {
     let mut contracts = BTreeMap::new();
-    for scope in globals() {
-      contracts.insert(scope.name.to_string(), scope);
+    for module in globals() {
+      contracts.insert(module.name.to_string(), module);
     }
     Self {
       current_file,
       working_dir,
-      last_id: Id(0),
+      last_id: Id(0, 0),
       infos: BTreeMap::new(),
-      contracts,
+      modules: contracts,
       found: BTreeMap::new(),
     }
   }
 
-  pub fn add_scope(&mut self, contract: Scope) -> Id {
+  pub fn add_module(&mut self, contract: Module) -> Id {
     let id = self.new_id();
     self.infos.entry(id).or_default();
     self.found.insert(contract.name.to_string(), id);
@@ -185,12 +185,12 @@ impl Typing {
       self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Bytecode, value: bytecode.to_string().into(), span: Span::default() });
       self.get_info(id).expr.returns = Type::String(StringPrefix::Bytecode)
     }
-    self.contracts.insert(contract.name.to_string(), contract);
+    self.modules.insert(contract.name.to_string(), contract);
     id
   }
 
   pub fn new_id(&mut self) -> Id {
-    let id = Id(self.last_id.0+1);
+    let id = Id(self.last_id.0+1, 0);
     self.last_id = id;
     id
   }
@@ -200,7 +200,7 @@ impl Typing {
   }
 
   pub fn get_info_view(&self, id: Id) -> &Info {
-    self.infos.get(&id).unwrap()
+    self.infos.get(&Id(id.0, 0)).unwrap()
   }
 
   pub fn find_name(&self, name: &str) -> Option<Id> {
@@ -222,11 +222,11 @@ impl Typing {
       self.get_info(id).span = span;
       return id
     }
-    if name.starts_with("$") {
-      if let Some(id) = self.found.get(name).copied() {
-        return id
-      }
-    }
+    // if name.starts_with("$") {
+    //   if let Some(id) = self.found.get(name).copied() {
+    //     return id
+    //   }
+    // }
 
     let id = self.new_id();
     self.infos.entry(id).or_default();
@@ -253,8 +253,14 @@ pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<()> {
 pub fn parse_stmt(state: &mut Typing, stmt: &StmtKind) -> Result<()> {
   match stmt {
     StmtKind::Assignment(stmt) => parse_assignment(state, stmt),
-    _ => unreachable!(),
+    StmtKind::Forloop(stmt) => parse_forloop(state, stmt),
+    StmtKind::Comment(_) => Ok(()),
   }
+}
+
+fn parse_forloop(state: &mut Typing, stmt: &Forloop) -> Result<()> {
+  let rhs = parse_expr(state, &stmt.rhs)?;
+  Ok(())
 }
 
 pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
@@ -367,8 +373,8 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       }.map_err(|e| Error::Io(e, path.clone(), span.clone()))?;
       let resolved_path = format!("@/{}", real_path.strip_prefix(&state.working_dir).map_err(|e| Error::Path(e, path.clone(), span.clone()))?.to_string_lossy());
       let content = std::fs::read_to_string(real_path).map_err(|e| Error::Io(e, resolved_path.clone(), span.clone()))?;
-      let scope = load_abi(&resolved_path, &content).map_err(|e| Error::Abi(e, resolved_path.clone(), span.clone()))?;
-      let id = state.add_scope(scope);
+      let module = load_abi(&resolved_path, &content).map_err(|e| Error::Abi(e, resolved_path.clone(), span.clone()))?;
+      let id = state.add_module(module);
       result.returns = Type::ContractType(resolved_path);
       result.code = ExprCode::Expr(id);
     },
@@ -418,13 +424,13 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
 
 fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let mut this = None;
-  let scope_ty = if i.scope.to_string() != "" {
-    let name = i.scope.to_string();
+  let module_ty = if i.module.to_string() != "" {
+    let name = i.module.to_string();
     if let Some(id) = state.find_name(&name) {
       this = Some(id);
-      trace!("func scope: {} {:?}", name, state.get_info(id));
+      trace!("func module: {} {:?}", name, state.get_info(id));
       state.get_info(id).ty().clone()
-    } else if state.contracts.contains_key(&name) {
+    } else if state.modules.contains_key(&name) {
       Type::Global(name)
     } else {
       Type::NoneType
@@ -432,31 +438,31 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   } else {
     Type::Global("@Global".to_string())
   };
-  let scope_str = match scope_ty {
+  let module_str = match module_ty {
     Type::Global(name) => name.to_string(),
     Type::Contract(name) => name.clone(),
-    _ => return Err(Error::ScopeNotContract(scope_ty, i.span.clone())),
+    _ => return Err(Error::ModuleNotContract(module_ty, i.span.clone())),
   };
 
   let name = i.name.to_string();
   let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
-  let (scope_str, name) = if scope_str == "@Global" && name == "deploy" {
+  let (module_str, name) = if module_str == "@Global" && name == "deploy" {
     if args.is_empty() {
-      return Err(Error::InferTypeFailed(scope_str, "deploy:this".to_string(), i.span.clone()))
+      return Err(Error::InferTypeFailed(module_str, "deploy:this".to_string(), i.span.clone()))
     }
     let this_arg = args.remove(0);
     this = match this_arg.code {
       ExprCode::Expr(i) => Some(i),
       _ => todo!(),
     };
-    let scope_str = match this_arg.returns {
+    let module_str = match this_arg.returns {
       Type::ContractType(i) => i,
       _ => todo!(),
     };
-    trace!("deploy: this = {:?} {}", this, scope_str);
-    (scope_str, "constructor".to_string())
+    trace!("deploy: this = {:?} {}", this, module_str);
+    (module_str, "constructor".to_string())
   } else {
-    (scope_str, name)
+    (module_str, name)
   };
   let mut arg_ids = Vec::new();
   let mut arg_types = Vec::new();
@@ -464,9 +470,9 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
     arg_types.push(arg.returns.clone());
     arg_ids.push(state.insert_expr(arg));
   }
-  let func = match state.contracts.get(&scope_str).and_then(|i| i.select(&name, &arg_types)) {
+  let func = match state.modules.get(&module_str).and_then(|i| i.select(&name, &arg_types)) {
     Some(func) => func,
-    None => return Err(Error::InferTypeFailed(scope_str, name, i.span.clone()))
+    None => return Err(Error::InferTypeFailed(module_str, name, i.span.clone()))
   };
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));

@@ -134,7 +134,11 @@ impl FromStr for Type {
 
 impl std::fmt::Display for Id {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    write!(f, "$${}", self.0)
+    if self.1 == 0 {
+      write!(f, "$${}", self.0)
+    } else {
+      write!(f, "$${}[{}]", self.0, self.1)
+    }
   }
 }
 

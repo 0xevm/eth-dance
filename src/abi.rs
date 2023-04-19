@@ -9,7 +9,7 @@ use ethabi::ParamType;
 use crate::typing::Type;
 
 #[derive(Debug)]
-pub struct Scope {
+pub struct Module {
   pub name: String,
   pub abi: Option<ContractAbi>,
   pub bytecode: Option<String>,
@@ -28,7 +28,7 @@ pub struct FuncImpl {
   pub output_types: Vec<ParamType>,
 }
 
-impl Scope {
+impl Module {
   pub fn new(name: &str, abi: ContractAbi, bytecode: Option<String>) -> Self {
     let mut funcs: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for (n, v) in &abi.functions {
@@ -87,7 +87,7 @@ impl FuncImpl {
   }
 }
 
-pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
+pub fn load_abi(name: &str, input: &str) -> Result<Module> {
   let mut abi_input = String::new();
   let mut bytecode = None;
   let compiled = serde_json::from_str::<serde_json::Value>(input)?;
@@ -109,29 +109,29 @@ pub fn load_abi(name: &str, input: &str) -> Result<Scope> {
 
   let io = std::io::Cursor::new(input);
   let abi = ContractAbi::load(io)?;
-  Ok(Scope::new(name, abi, bytecode))
+  Ok(Module::new(name, abi, bytecode))
 }
 
-pub fn global_scope(scope_name: &'static str, funcs: &[(&str, Vec<ParamType>, Vec<ParamType>)]) -> Scope {
-  let mut scope = Scope { name: scope_name.to_string(), abi: None, bytecode: None, funcs: BTreeMap::new() };
+pub fn global_module(module_name: &'static str, funcs: &[(&str, Vec<ParamType>, Vec<ParamType>)]) -> Module {
+  let mut module = Module { name: module_name.to_string(), abi: None, bytecode: None, funcs: BTreeMap::new() };
   for (n, input, output) in funcs {
-    scope.funcs.entry(n.to_string()).or_default().push(Func::new(
+    module.funcs.entry(n.to_string()).or_default().push(Func::new(
       FuncImpl {
-        ns: scope_name.to_string(), name: n.to_string(),
+        ns: module_name.to_string(), name: n.to_string(),
         abi: None, signature: Default::default(), selector: Default::default(),
         input_types: input.clone(), output_types: output.clone(),
       }));
   }
-  scope
+  module
 }
 
-pub fn globals() -> Vec<Scope> {
+pub fn globals() -> Vec<Module> {
   vec![
-    global_scope("@Global", &[
+    global_module("@Global", &[
       ("deploy", vec![], vec![ParamType::Address]),
     ]),
 
-    global_scope("@assert", &[
+    global_module("@assert", &[
       ("eq", vec![ParamType::Bytes, ParamType::Bytes], vec![]),
     ]),
   ]

@@ -11,7 +11,7 @@ use crate::{
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
-  pub id: u64,
+  pub id: (u64, u64),
   pub name: Option<String>,
   #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,7 +42,7 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
       Type::ContractType(_) => None,
       _ => Some(value.clone()),
     };
-    let id = id.0;
+    let id = (id.0, id.1);
     let mut item = Item {
       id, name: name.clone(), ty,
       value: v,
@@ -53,8 +53,8 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
       item.value = None;
     }
     ids_cache.insert(id, item);
-    if id > out.last_id {
-      out.last_id = id;
+    if id.0 > out.last_id {
+      out.last_id = id.0;
     }
   }
   for (_id, item) in ids_cache {
