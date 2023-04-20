@@ -5,54 +5,87 @@ use ethabi::Address;
 use ethers::signers::LocalWallet;
 
 use crate::{
-  vm::ValueKind,
-  ast::{TypedNumber, TypedString, StringPrefix, NumberSuffix},
+  vm::{ValueKind, Value},
+  ast::{TypedNumber, TypedString, StringPrefix, NumberSuffix}, typing::Type,
 };
 
 use super::{conv::{try_convert_hex_to_bytes, ErrorKindExt, ErrorKind}, Error, value_into::Number};
 
-impl From<Address> for ValueKind {
-  fn from(value: Address) -> Self {
-    ValueKind::Address(value, None)
+impl Value {
+  pub fn from_address(address: Address, name: Option<String>) -> Self {
+    match name {
+      Some(name) => Self { v: ValueKind::Address(address), ty: Type::Contract(name) },
+      None => Self { v: ValueKind::Address(address), ty: Type::Address },
+    }
+
+  }
+  pub fn from_bool(bool: bool) -> Self {
+    Self { v: ValueKind::Bool(bool), ty: Type::Bool }
+  }
+  pub fn from_string(string: String) -> Self {
+    Self { v: ValueKind::String(string), ty: Type::String }
+  }
+  pub fn from_bytes(bytes: Vec<u8>) -> Self {
+    Self { v: ValueKind::Bytes(bytes), ty: Type::Bytes }
+  }
+  pub fn from_bytecode(bytes: Vec<u8>, name: Option<String>) -> Self {
+    match name {
+      Some(name) => Self { v: ValueKind::Bytecode(bytes), ty: Type::ContractType(name) },
+      None => Self { v: ValueKind::Bytecode(bytes), ty: Type::Bytes },
+    }
+  }
+  pub fn from_number(base: BigDecimal, suffix: NumberSuffix) -> Self {
+    Self { v: ValueKind::Number(base), ty: Type::Number(suffix) }
+  }
+  pub fn from_wallet(wallet: LocalWallet) -> Self {
+    Self { v: ValueKind::Wallet(wallet), ty: Type::Wallet }
+  }
+  pub fn from_array(array: Vec<ValueKind>, item_ty: Type) -> Self {
+    let len = array.len();
+    Self { v: ValueKind::Array(array, item_ty.clone()), ty: Type::FixedArray(Box::new(item_ty), len) }
+  }
+  pub fn from_tuple(array: Vec<Value>) -> Self {
+    todo!()
+    // Self { v: ValueKind::Tuple(array), ty: todo!() }
   }
 }
 
-impl TryFrom<Number> for ValueKind {
+impl TryFrom<Number> for Value {
   type Error = &'static str;
   fn try_from(value: Number) -> Result<Self, Self::Error> {
     let result = match value {
       Number::I(i) =>
-        ValueKind::Number(BigDecimal::from_str(&i.to_string()).unwrap(), NumberSuffix::Signed),
+        Value::from_number(BigDecimal::from_str(&i.to_string()).unwrap(), NumberSuffix::Signed),
       Number::U(i) =>
-        ValueKind::Number(BigDecimal::from_str(&i.to_string()).unwrap(), NumberSuffix::None),
+        Value::from_number(BigDecimal::from_str(&i.to_string()).unwrap(), NumberSuffix::None),
       Number::F(_) => {
         let f: f64 = value.try_into().map_err(|_| "convert f64 from Number in ValueKind")?;
         let base = BigDecimal::from_f64(f).ok_or_else(|| "convert f64 from Number in ValueKind")?;
         // ValueKind::Number(BigDecimal, ())
-        ValueKind::Number(base, NumberSuffix::F(64))
+        Value::from_number(base, NumberSuffix::F(64))
       }
     };
     Ok(result)
   }
 }
 
-impl TryFrom<TypedNumber> for ValueKind {
+impl TryFrom<TypedNumber> for Value {
   type Error = &'static str;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
     trace!("try_from(Value<=TypedNumber): {:?}", value.suffix);
     let base = bigdecimal::BigDecimal::from_str(&value.value).map_err(|_| "convert to BigDecimal failed")?;
-    return Ok(ValueKind::Number(base, value.suffix));
+    return Ok(Value::from_number(base, value.suffix));
   }
 }
 
-impl TryFrom<TypedString> for ValueKind {
+impl TryFrom<TypedString> for Value {
   type Error = Error;
 
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
     let bytes = match value.prefix {
       StringPrefix::None => {
         let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
-        return Ok(ValueKind::String(string))
+        return Ok(Value::from_string(string))
       },
       StringPrefix::Hex | StringPrefix::Key | StringPrefix::Bytecode => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
@@ -60,7 +93,7 @@ impl TryFrom<TypedString> for ValueKind {
       }
       StringPrefix::Address => {
         let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
-        return Ok(ValueKind::Address(Address::from_slice(&addr), None))
+        return Ok(Value::from_address(Address::from_slice(&addr), None))
       }
       StringPrefix::Byte => {
         value.value
@@ -71,13 +104,14 @@ impl TryFrom<TypedString> for ValueKind {
     match value.prefix {
       StringPrefix::Key => {
         let wallet = LocalWallet::from_bytes(&bytes).map_err(ErrorKind::from).when("try_from")?;
-        return Ok(ValueKind::Wallet(wallet))
+        return Ok(Value::from_wallet(wallet))
       }
       StringPrefix::Bytecode => {
-        return Ok(ValueKind::Bytecode(bytes))
+        warn!("fixme: from bytecode");
+        return Ok(Value::from_bytecode(bytes, None));
       }
       _ => {}
     }
-    Ok(ValueKind::Bytes(bytes))
+    Ok(Value::from_bytes(bytes))
   }
 }

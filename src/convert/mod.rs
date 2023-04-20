@@ -1,5 +1,6 @@
 pub mod serde;
 pub mod str;
+pub mod value;
 pub mod value_from;
 pub mod value_into;
 pub mod conv;
@@ -11,7 +12,7 @@ use ethers::{
   types::I256,
 };
 
-use crate::{typing::Type, vm::ValueKind};
+use crate::{typing::Type, vm::{ValueKind, Value}};
 
 use self::{
   conv::{try_trim_u256, try_trim_i256, ErrorKind},
@@ -23,10 +24,10 @@ use self::{
 //   abi: ParamType,
 // }
 
-impl ValueKind {
+impl Value {
   pub fn into_token(&self, abi: &ParamType) -> Result<Token, Error> {
-    let result = match (self, abi) {
-      (ValueKind::Address(addr, _), ParamType::Address) => Token::Address(*addr),
+    let result = match (&self.v, abi) {
+      (ValueKind::Address(addr), ParamType::Address) => Token::Address(*addr),
       (ValueKind::Wallet(wallet), ParamType::Address) => Token::Address(wallet.address()),
 
       (_, ParamType::Uint(s)) => {
@@ -54,28 +55,29 @@ impl ValueKind {
 
   pub fn from_token(token: Token) -> Result<Self, Error> {
     let result = match token {
-      Token::Address(addr) => ValueKind::Address(addr, None),
+      Token::Address(addr) => Value::from_address(addr, None),
       Token::FixedBytes(i) | Token::Bytes(i)
-        => ValueKind::Bytes(i),
+        => Value::from_bytes(i),
       Token::Int(i) => Number::I(I256::from_raw(i)).try_into().map_err(|e| ErrorKind::Number(e).when("from_token"))?,
       Token::Uint(i) => Number::U(i).try_into().map_err(|e| ErrorKind::Number(e).when("from_token"))?,
-      Token::Bool(i) => ValueKind::Bool(i),
-      Token::String(i) => ValueKind::String(i),
+      Token::Bool(i) => Value::from_bool(i),
+      Token::String(i) => Value::from_string(i),
       Token::FixedArray(i) | Token::Array(i) => {
         if i.len() == 0 {
-          return Ok(ValueKind::Array(Vec::new(), Type::NoneType))
+          return Ok(Value::from_array(Vec::new(), Type::NoneType))
         }
         let mut v = Vec::new();
         let mut ty = None;
         for x in i {
-          v.push(Self::from_token_ty(x, ty.as_ref())?);
+          let t = Self::from_token_ty(x, ty.as_ref())?;
+          v.push(t.v);
           if ty.is_none() {
-            ty = Some(v.last().unwrap().ty())
+            ty = Some(t.ty)
           }
         }
-        ValueKind::Array(v, ty.unwrap_or_default())
+        Value::from_array(v, ty.unwrap_or_default())
       }
-      Token::Tuple(i) => ValueKind::Tuple(i.into_iter().map(Self::from_token).collect::<Result<_,_>>()?),
+      Token::Tuple(i) => Value::from_tuple(i.into_iter().map(Self::from_token).collect::<Result<_,_>>()?),
     };
     Ok(result)
   }
@@ -86,7 +88,7 @@ impl ValueKind {
     }
     let result = match (token, ty.unwrap()) {
       (token, Type::Abi(_)) => Self::from_token(token)?,
-      (Token::Address(addr), Type::Contract(name)) => ValueKind::Address(addr, Some(name.to_string())),
+      (Token::Address(addr), Type::Contract(name)) => Value::from_address(addr, Some(name.to_string())),
 
       (token, _) => {
         todo!("from_token: {:?} {:?}", token, ty)

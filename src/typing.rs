@@ -86,7 +86,8 @@ impl<T, E: Into<ErrorKind>> ErrorExt<T, E> for Result<T, E> {
   }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, strum::AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum Type {
   #[default] NoneType,
   Global(String),
@@ -95,11 +96,26 @@ pub enum Type {
   // Function(String, String),
   Abi(ethabi::ParamType),
   Bool,
-  String(StringPrefix), // the prefix
+  Bytes,
+  Wallet,
+  Address,
+  String,
+  // Custom(StringPrefix), // the prefix
   Number(NumberSuffix),
   FixedArray(Box<Type>, usize),
 }
 
+impl From<StringPrefix> for Type {
+  fn from(value: StringPrefix) -> Self {
+    match value {
+      StringPrefix::None => Type::String,
+      StringPrefix::Byte | StringPrefix::Bytecode | StringPrefix::Hex => Type::Bytes,
+      StringPrefix::Key => Type::Wallet,
+      StringPrefix::Address => Type::Address,
+      StringPrefix::Contract => Type::Bytes,
+    }
+  }
+}
 impl Type {
   pub fn abi(&self) -> Option<ethabi::ParamType> {
     Some(match self {
@@ -110,15 +126,9 @@ impl Type {
       // Type::Function(_, _) => return None,
       Type::Abi(i) => i.clone(),
       Type::Bool => ethabi::ParamType::Bool,
-      Type::String(s) => match s {
-        StringPrefix::None => ethabi::ParamType::String,
-        StringPrefix::Address => ethabi::ParamType::Address,
-        StringPrefix::Byte | StringPrefix::Bytecode | StringPrefix::Key | StringPrefix::Hex => ethabi::ParamType::Bytes,
-        StringPrefix::Contract => todo!(),
-        // _ => {
-        //   unreachable!("fixme: type(string) abi {}", s)
-        // }
-      },
+      Type::String => ethabi::ParamType::String,
+      Type::Address | Type::Wallet => ethabi::ParamType::Address,
+      Type::Bytes => ethabi::ParamType::Bytes,
       Type::Number(i) => match i {
         NumberSuffix::F(size) => ethabi::ParamType::FixedBytes(*size / 8),
         _ if i.is_unsigned() => ethabi::ParamType::Uint(256),
@@ -264,7 +274,7 @@ impl Typing {
     self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
     if let Some(bytecode) = &contract.bytecode {
       self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Bytecode, value: bytecode.to_string().into(), span: Span::default() });
-      self.get_info(id).expr.returns = Type::String(StringPrefix::Bytecode)
+      self.get_info(id).expr.returns = Type::Bytes
     }
     self.modules.insert(contract);
     id
@@ -467,11 +477,11 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
       match s.as_str() {
         "none" => Type::NoneType,
         "bool" => Type::Bool,
-        "string" => Type::String(StringPrefix::None),
-        "address" => Type::String(StringPrefix::Address),
-        "wallet" => Type::String(StringPrefix::Key),
-        "bytes" => Type::String(StringPrefix::Byte),
-        "bytecode" => Type::String(StringPrefix::Bytecode),
+        "string" => Type::String,
+        "address" => Type::Address,
+        "wallet" => Type::Wallet,
+        "bytes" => Type::Bytes,
+        // "bytecode" => Type::Custom(StringPrefix::Bytecode),
         _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
         _ if s.starts_with("int_") => {
           let suffix = &s["int_".len()..];
@@ -532,7 +542,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
       unreachable!()
     },
     ExprKind::String(i) => {
-      result.returns = Type::String(i.prefix.clone());
+      result.returns = i.prefix.into();
       result.code = ExprCode::String(i.clone());
     },
     ExprKind::Number(i) => {

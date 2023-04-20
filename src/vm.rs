@@ -12,7 +12,6 @@ use ethers::{
 use crate::{
   typing::{Typing, ExprCode, Id, Type, Info},
   abi::Func,
-  ast::{NumberSuffix, StringPrefix},
 };
 
 // pub struct Error {
@@ -24,23 +23,28 @@ pub use anyhow::Result;
 #[derive(Clone, PartialEq)]
 pub enum ValueKind {
   Bool(bool),
-  Number(bigdecimal::BigDecimal, NumberSuffix),
-  Address(Address, Option<String>),
+  Number(bigdecimal::BigDecimal),
+  Address(Address),
   Wallet(LocalWallet), // Custom(key)
   String(String), // String
   Bytes(Vec<u8>), // Custom(hex)
   Bytecode(Vec<u8>), // Custom(contract)
-  FixedArray(Vec<ValueKind>, Type, usize),
   Array(Vec<ValueKind>, Type),
-  Tuple(Vec<ValueKind>),
+  Tuple(Vec<Value>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Value {
+  pub v: ValueKind,
+  pub ty: Type,
 }
 
 impl std::fmt::Debug for ValueKind {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
-      Self::Number(arg0, arg1) => f.debug_tuple("Number").field(arg0).field(arg1).finish(),
-      Self::Address(arg0, arg1) => f.debug_tuple("Address").field(arg0).field(arg1).finish(),
+      Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
+      Self::Address(arg0) => f.debug_tuple("Address").field(arg0).finish(),
       Self::Wallet(arg0) => f.debug_tuple("Wallet").field(arg0).finish(),
       Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
       Self::Bytes(arg0) => f.debug_tuple("Bytes").field(arg0).finish(),
@@ -48,51 +52,25 @@ impl std::fmt::Debug for ValueKind {
         // TODO: show
         f.debug_tuple("Bytecode").field(&[arg0.len()]).finish()
       }
-      Self::FixedArray(arg0, arg1, arg2) => f.debug_tuple("FixedArray").field(arg0).field(arg1).field(arg2).finish(),
       Self::Array(arg0, arg1) => f.debug_tuple("Array").field(arg0).field(arg1).finish(),
       Self::Tuple(arg0) => f.debug_tuple("Tuple").field(arg0).finish(),
     }
   }
 }
 
-impl ValueKind {
+impl Value {
+  pub const NONE: Value = Self { v: ValueKind::Tuple(Vec::new()), ty: Type::NoneType };
+  pub fn new(v: ValueKind, ty: Type) -> Result<Self> {
+    Ok(Self { v, ty })
+  }
   pub fn show(&self) -> String {
     const MAX_LEN: usize = 64;
-    let s = format!("{:?}", self);
+    let s = format!("{:?}", self.v);
     if s.len() > MAX_LEN {
-      format!("{}...: {}", &s[..MAX_LEN/2], self.ty())
+      format!("{}...: {}", &s[..MAX_LEN/2], self.ty)
     } else {
       s
     }
-  }
-  pub fn ty(&self) -> Type {
-    match self {
-      ValueKind::Bool(_) => Type::Bool,
-      ValueKind::Number(_, suffix) => Type::Number(*suffix),
-      ValueKind::Address(_, _) => Type::String(StringPrefix::Address),
-      ValueKind::Wallet(_) => Type::String(StringPrefix::Key),
-      ValueKind::String(_) => Type::String(StringPrefix::None),
-      ValueKind::Bytes(_) => Type::String(StringPrefix::Byte),
-      ValueKind::Bytecode(_) => Type::String(StringPrefix::Bytecode),
-      ValueKind::FixedArray(_, sub_ty, n) => Type::FixedArray(Box::new(sub_ty.clone()), *n),
-      ValueKind::Array(_, _) => todo!(),
-      ValueKind::Tuple(i) if i.is_empty() => Type::NoneType,
-      ValueKind::Tuple(_) => todo!(),
-    }
-  }
-  fn as_ty(self, ty: &Type) -> Result<ValueKind, ValueKind> {
-    trace!("convert {} => {}", self.ty(), ty);
-    if &self.ty() == ty {
-      return Ok(self)
-    }
-    let result = match (self, ty) {
-      (ValueKind::Number(base, _), Type::Number(suffix)) => ValueKind::Number(base, *suffix),
-      (value, _) => {
-        warn!("unknown convert {} {}", value.ty(), ty);
-        return Err(value)
-      }
-    };
-    Ok(result)
   }
 }
 
@@ -105,7 +83,7 @@ pub struct BuiltIn {
 }
 pub struct VM {
   pub generation: BTreeMap<Id, Id>,
-  pub values: BTreeMap<Id, ValueKind>,
+  pub values: BTreeMap<Id, Value>,
   pub builtin: BTreeMap<String, Id>,
   pub state: BuiltIn,
   pub provider: Provider,
@@ -121,22 +99,22 @@ impl VM {
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
-  pub fn set_builtin(&mut self, name: &str, id: Id, value: &ValueKind) {
+  pub fn set_builtin(&mut self, name: &str, id: Id, value: &Value) {
     match name {
-      "$endpoint" => match &value {
+      "$endpoint" => match &value.v {
         ValueKind::String(s) => {
           *self.provider.url_mut() = url::Url::parse(s).unwrap();
         }
         _ => unreachable!()
       }
-      "$account" => match &value {
+      "$account" => match &value.v {
         ValueKind::Wallet(wallet) => {
           self.state.wallet = Some(wallet.clone());
         }
         _ => unreachable!()
       }
-      "$confirm_interval" => match &value {
-        ValueKind::Number(number, _) => {
+      "$confirm_interval" => match &value.v {
+        ValueKind::Number(number) => {
           self.state.confirm_interval = Some(number.to_f64().unwrap());
         }
         _ => unreachable!()
@@ -145,14 +123,14 @@ impl VM {
     };
     self.builtin.insert(name.to_string(), id);
   }
-  pub fn get_value(&self, id: Id) -> Option<&ValueKind> {
+  pub fn get_value(&self, id: Id) -> Option<&Value> {
     if let Some(id) = self.generation.get(&id) {
       self.values.get(id)
     } else {
       self.values.get(&id)
     }
   }
-  pub fn set_value(&mut self, id: Id, info: &Info, value: ValueKind) -> Result<()> {
+  pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
     trace!("set_value: {} = {}", id, value.show());
     // let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
@@ -224,15 +202,14 @@ pub fn execute(vm: &mut VM, typing: &Typing, start: Option<Id>, end: Option<Id>)
         let Some(range) = vm.get_value(*scope).cloned() else {
           bail!("scope range {} not present", scope);
         };
-        match range {
-          ValueKind::Array(arr, ty) |
-          ValueKind::FixedArray(arr, ty, _) => {
+        match range.v {
+          ValueKind::Array(arr, ty) => {
             for item in arr {
-              vm.set_value(*id, info, item)?;
+              vm.set_value(*id, info, Value::new(item, ty.clone())?)?;
               execute(vm, typing, Some(*id), Some(*stop))?;
             }
           }
-          _ => bail!("scope range {} not iteratable: {}", scope, range.ty()),
+          _ => bail!("scope range {} not iteratable: {}", scope, range.ty),
         }
         continue
       }
@@ -246,7 +223,7 @@ pub fn execute(vm: &mut VM, typing: &Typing, start: Option<Id>, end: Option<Id>)
   Ok(())
 }
 
-fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>) -> Result<ValueKind> {
+fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>) -> Result<Value> {
   let value = match &code {
     ExprCode::Convert(i, ty) => {
       let value = if let Some(value) = vm.get_value(*i) {
@@ -266,23 +243,21 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       if func.name == "constructor" && *send {
         let this = this.unwrap();
         trace!("contract name {}", &func.ns);
-        let bytecode = match vm.get_value(this) {
-          Some(ValueKind::Bytecode(bytes)) => bytes,
-          _ => anyhow::bail!("vm: contract bytecode not present"),
+        let Some(bytecode) = vm.get_value(this).and_then(Value::as_bytecode) else {
+          anyhow::bail!("vm: contract bytecode not present")
         };
         let result = deploy_contract(vm, func.clone(), bytecode, &args)?;
-        result.unwrap().into()
+        Value::from_address(result.unwrap(), None)
       } else if !func.ns.starts_with("@/") {
         call_global(vm, func.clone(), &args)?
       } else if let Some(this) = this {
-        let this_addr = match vm.get_value(*this) {
-          Some(ValueKind::Address(address, _)) => *address,
-          _ => anyhow::bail!("vm: this not address")
+        let Some(this_addr) = vm.get_value(*this).and_then(Value::as_address) else {
+          anyhow::bail!("vm: this not address")
         };
         trace!("this_addr: {:?} {:?}", this, this_addr);
         if *send {
           send_tx(vm, this_addr, func.clone(), &args)?;
-          ValueKind::Tuple(Vec::new())
+          Value::NONE
         } else {
           call_tx(vm, this_addr, func.clone(), &args, ty)?
         }
@@ -291,10 +266,10 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       }
     }
     ExprCode::Number(number) => {
-      ValueKind::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?
+      Value::try_from(number.clone()).map_err(|e| anyhow::format_err!("TypedNumber: {}", e))?
     }
     ExprCode::String(string) => {
-      ValueKind::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?
+      Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?
     }
     ExprCode::List(list) => {
       let mut values = Vec::new();
@@ -302,19 +277,20 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       for i in list {
         let value = execute_impl(vm, typing, i, sub_ty.as_ref())?;
         if let Some(sub_ty) = &sub_ty {
-          if &value.ty() != sub_ty {
-            error!("execute array sub_ty: {} != {}", sub_ty, value.ty());
+          if &value.ty != sub_ty {
+            error!("execute array sub_ty: {} != {}", sub_ty, value.ty);
           }
         } else {
-          sub_ty = Some(value.ty())
+          sub_ty = Some(value.ty)
         }
-        values.push(value)
+        values.push(value.v)
       }
-      ValueKind::FixedArray(values, sub_ty.unwrap_or_default(), list.len())
+      let sub_ty = sub_ty.unwrap_or_default();
+      Value::new(ValueKind::Array(values, sub_ty.clone()), Type::FixedArray(Box::new(sub_ty), list.len()))?
     },
     _ => {
       warn!("skip {:?}: {:?}", ty, code);
-      ValueKind::Tuple(vec![])
+      Value::NONE
     }
   };
   Ok(match ty {
@@ -325,13 +301,13 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
   })
 }
 
-fn call_global(_vm: &VM, func: Func, args: &[&ValueKind]) -> Result<ValueKind> {
+fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
   let out = match (func.ns.as_str(), func.name.as_str()) {
     ("@assert", "eq") => {
       if args[0] != args[1] {
         anyhow::bail!("vm: assert_eq failed: {:?} != {:?}", args[0], args[1])
       }
-      ValueKind::Bool(true)
+      Value::from_bool(true)
     }
     _ => unreachable!()
   };
@@ -363,20 +339,20 @@ async fn do_call_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<ethabi::
   Ok(vm.provider.call(&tx.into(), None).await?.to_vec())
 }
 
-fn convert_to_token(input_types: &[ParamType], args: &[&ValueKind]) -> Result<Vec<Token>> {
+fn convert_to_token(input_types: &[ParamType], args: &[&Value]) -> Result<Vec<Token>> {
   let result = args.iter().zip(input_types).map(|(i, abi)| i.clone().into_token(abi)).collect::<Result<_, _>>()?;
   Ok(result)
 }
-fn convert_from_token(ty: Option<&Type>, mut args: Vec<Token>) -> Result<ValueKind> {
+fn convert_from_token(ty: Option<&Type>, mut args: Vec<Token>) -> Result<Value> {
   let arg = if args.len() == 1 {
     args.remove(0)
   } else {
     Token::Tuple(args)
   };
-  Ok(ValueKind::from_token_ty(arg, ty)?)
+  Ok(Value::from_token_ty(arg, ty)?)
 }
 
-fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Result<()> {
+fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<()> {
   let tokens = convert_to_token(&func.input_types, args)?;
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
@@ -387,7 +363,7 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind]) -> Resu
   Ok(())
 }
 
-fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind], ty: Option<&Type>) -> Result<ValueKind> {
+fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value], ty: Option<&Type>) -> Result<Value> {
   let tokens = convert_to_token(&func.input_types, args)?;
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
@@ -401,7 +377,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&ValueKind], ty: Opt
   Ok(result)
 }
 
-fn deploy_contract(vm: &VM, func: Func, bytecode: &[u8], args: &[&ValueKind]) -> Result<Option<Address>> {
+fn deploy_contract(vm: &VM, func: Func, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
   let tokens = convert_to_token(&func.input_types, args)?;
   info!("deploy_contract: {} {} to {}", func.ns, bytecode.len(), vm.provider.url());
   let mut input_data = Vec::new();

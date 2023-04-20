@@ -1,9 +1,13 @@
 use std::str::FromStr;
 
 use bigdecimal::{FromPrimitive, num_bigint::BigInt, BigDecimal};
-use ethers::types::{I256, U256};
+use ethers::types::{Address, I256, U256};
 
-use crate::{vm::ValueKind, ast::NumberSuffix};
+use crate::{
+  vm::{Value, ValueKind},
+  ast::NumberSuffix,
+  typing::Type,
+};
 
 use super::{Error, conv::{ErrorKind, ErrorKindExt}};
 
@@ -11,12 +15,34 @@ pub enum Number {
   I(I256), U(U256), F(Vec<u8>),
 }
 
-impl TryInto<Number> for &ValueKind {
+impl Value {
+  pub fn as_bytecode(&self) -> Option<&Vec<u8>> {
+    match &self.v {
+      ValueKind::Bytecode(v) => Some(v),
+      _ => None,
+    }
+  }
+  pub fn as_address(&self) -> Option<Address> {
+    match &self.v {
+      ValueKind::Address(v) => Some(*v),
+      _ => None,
+    }
+  }
+  pub fn as_number(&self) -> Option<(&BigDecimal, NumberSuffix)> {
+    match &self {
+      Self { v: ValueKind::Number(base), ty: Type::Number(suffix) }
+        => Some((base, *suffix)),
+      _ => None,
+    }
+  }
+}
+
+impl TryInto<Number> for &Value {
   type Error = Error;
 
   fn try_into(self) -> Result<Number, Self::Error> {
-    match self {
-      ValueKind::Number(base, suffix) => {
+    match self.as_number() {
+      Some((base, suffix)) => {
         trace!("try_from(Value<=TypedNumber): {:?}", suffix);
         match suffix {
           NumberSuffix::None => {

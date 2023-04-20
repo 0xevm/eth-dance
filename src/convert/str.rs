@@ -6,7 +6,7 @@ use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
 use crate::typing::{Id, self};
-use crate::vm::ValueKind;
+use crate::vm::{ValueKind, Value};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
 impl Display for Ident {
@@ -96,11 +96,11 @@ impl Display for Type {
     match self {
       Type::NoneType => write!(f, "none"),
       Type::Bool => write!(f, "bool"),
-      Type::String(StringPrefix::None) => write!(f, "string"),
-      Type::String(StringPrefix::Address) => write!(f, "address"),
-      Type::String(StringPrefix::Byte) | Type::String(StringPrefix::Hex) => write!(f, "bytes"),
-      Type::String(StringPrefix::Bytecode) | Type::String(StringPrefix::Contract) => write!(f, "bytecode"),
-      Type::String(StringPrefix::Key) => write!(f, "wallet"),
+      Type::String => write!(f, "string"),
+      Type::Address => write!(f, "address"),
+      Type::Bytes => write!(f, "bytes"),
+      // Type::Custom(StringPrefix::Bytecode) | Type::Custom(StringPrefix::Contract) => write!(f, "bytecode"),
+      Type::Wallet => write!(f, "wallet"),
       Type::Global(s) => write!(f, "@{}", s),
       Type::Contract(s) => write!(f, "{:?}", s),
       // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
@@ -179,43 +179,44 @@ impl std::fmt::Display for ExprCode {
 //   }
 // }
 
-impl Display for ValueKind {
+impl Display for Value {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    match self {
+    match &self.v {
       ValueKind::Tuple(i) => write!(f, "({})", i.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")),
-      _ => write!(f, "{}: {}", self.value_str(), self.ty())
+      _ => write!(f, "{}: {}", self.v.repr_str(), self.ty)
     }
   }
 }
 
-impl FromStr for ValueKind {
+impl FromStr for Value {
   type Err = &'static str;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     if s == "()" {
-      return Ok(Self::Tuple(vec![]))
+      return Ok(Self::NONE)
     }
     if s.starts_with("(") && s.ends_with(")") {
       todo!()
     }
     let sr = s.rsplitn(2, ":").collect::<Vec<_>>();
     let ty: Type = sr[0].trim().parse()?;
-    Self::parse_str(sr[1], &ty)
+    let v = ValueKind::parse_str(sr[1], &ty)?;
+    Self::new(v, ty).map_err(|_| "type error")
   }
 }
 
 impl ValueKind {
-  pub fn value_str(&self) -> String {
+  pub fn repr_str(&self) -> String {
     match self {
       ValueKind::Bool(i) => format!("{}", i),
-      ValueKind::Number(i, _) => format!("{}", i),
-      ValueKind::Address(i, _) => format!("{}", to_checksum(i, None)),
+      ValueKind::Number(i) => format!("{}", i),
+      ValueKind::Address(i) => format!("{}", to_checksum(i, None)),
       ValueKind::Wallet(i) => format!("0x{}", hex::encode(i.clone().signer().to_bytes())),
       ValueKind::String(i) => format!("{:?}", i),
       ValueKind::Bytes(i) => format!("0x{}", hex::encode(i)),
       ValueKind::Bytecode(i) => format!("0x{}", hex::encode(i)), // TODO: hash
-      ValueKind::FixedArray(i, _, _) | ValueKind::Array(i, _) => format!("[{}]", i.iter().map(|x| x.value_str()).collect::<Vec<_>>().join(", ")),
-      ValueKind::Tuple(i) =>  format!("({})", i.iter().map(|x| x.value_str()).collect::<Vec<_>>().join(", ")),
+      ValueKind::Array(i, _) => format!("[{}]", i.iter().map(|x| x.repr_str()).collect::<Vec<_>>().join(", ")),
+      ValueKind::Tuple(i) =>  format!("({})", i.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")),
     }
   }
 
@@ -232,29 +233,29 @@ impl ValueKind {
         "false" => Self::Bool(false),
         _ => return Err("unknown bool"),
       },
-      Type::String(StringPrefix::None) => Self::String(unescape_str(s)?),
-      Type::String(prefix) => {
+      Type::String => Self::String(unescape_str(s)?),
+      Type::Bytes | Type::Wallet | Type::Address => {
         let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).unwrap();
-        match prefix {
-          StringPrefix::None => unreachable!(),
-          StringPrefix::Byte | StringPrefix::Hex =>
-            Self::Bytes(bytes),
-          StringPrefix::Bytecode => return Ok(Self::Bytecode(bytes)),
-          StringPrefix::Key => return Ok(Self::Wallet(LocalWallet::from_bytes(&bytes).unwrap())),
-          StringPrefix::Address => {
+        match ty {
+          // StringPrefix::None => unreachable!(),
+          Type::Bytes => Self::Bytes(bytes),
+          // StringPrefix::Bytecode => return Ok(Self::Bytecode(bytes)),
+          Type::Wallet => return Ok(Self::Wallet(LocalWallet::from_bytes(&bytes).unwrap())),
+          Type::Address => {
             let mut b = [0u8; 20];
             b.copy_from_slice(&bytes);
-            Self::Address(b.into(), None)
+            Self::Address(b.into())
           }
-          StringPrefix::Contract => todo!(),
+          // StringPrefix::Contract => todo!(),
+          _ => unreachable!()
         }
       }
-      Type::Number(suffix) =>
-        Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap(), *suffix),
-      Type::FixedArray(inner, n) => {
+      Type::Number(_) =>
+        Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap()),
+      Type::FixedArray(inner, _) => {
         warn!("fixme: parse array");
         let v = s[1..s.len()-1].split(",").map(|i| Self::parse_str(i.trim(), inner.as_ref())).collect::<Result<_, _>>()?;
-        Self::FixedArray(v, inner.as_ref().clone(), *n)
+        Self::Array(v, inner.as_ref().clone())
       },
     };
     Ok(result)

@@ -66,11 +66,11 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   result?;
   for (name, id) in &state.scopes.latest {
     let Some(value) = vm.get_value(*id) else { continue };
-    if let ValueKind::Bytecode(i) = value {
+    if let Some(i) = value.as_bytecode() {
       info!("vm: {:?}({}) = <{}> hash={} len={}", name, id, "bytecode", ethabi::Token::FixedBytes(ethers::utils::keccak256(i).to_vec()), i.len());
       continue;
     }
-    info!("vm: {:?}({}) = <{}> {}", name, id, value.ty(), value.value_str());
+    info!("vm: {:?}({}) = <{}> {}", name, id, value.ty, value.v.repr_str());
   }
   let cache = out::cache::from_vm(&vm, &state);
   std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;

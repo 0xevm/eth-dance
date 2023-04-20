@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::{
   typing::{Type, Typing},
-  vm::{VM, ValueKind},
+  vm::{VM, Value},
 };
 
 #[serde_with::serde_as]
@@ -15,10 +15,8 @@ pub struct Item {
   pub name: Option<String>,
   #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub value: Option<ValueKind>,
+  pub value: Option<Value>,
   pub value_hash: H256,
-  #[serde_as(as = "serde_with::DisplayFromStr")]
-  pub ty: Type,
   // pub code: ExprCode,
 }
 
@@ -44,9 +42,9 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
     };
     let id = (id.0, id.1);
     let mut item = Item {
-      id, name: name.clone(), ty,
+      id, name: name.clone(),
       value: v,
-      value_hash: ethers::utils::keccak256(value.value_str().as_bytes()).into(),
+      value_hash: ethers::utils::keccak256(value.v.repr_str().as_bytes()).into(),
     };
     if let Some(name) = name {
       out.vars.insert(name, item.clone());
