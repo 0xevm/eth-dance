@@ -15,7 +15,7 @@ use ethers::{
 use crate::{typing::Type, vm::{ValueKind, Value}};
 
 use self::{
-  conv::{try_trim_u256, try_trim_i256},
+  conv::{try_trim_u256, try_trim_i256, ErrorExt},
   value_into::Number
 };
 
@@ -33,8 +33,8 @@ impl Value {
       (Type::Number(_), _, ParamType::Uint(s)) => {
         let number: Number = self.try_into()?;
         let i = match number {
-          Number::U(i) => try_trim_u256(i, *s)?,
-          Number::I(i) => try_trim_u256(i.into_raw(), s.saturating_sub(1))?,
+          Number::U(i) => try_trim_u256(i, *s).when("into_token", self)?,
+          Number::I(i) => try_trim_u256(i.into_raw(), s.saturating_sub(1)).when("into_token", self)?,
           _ => todo!()
         };
         Token::Uint(i)
@@ -42,8 +42,8 @@ impl Value {
       (Type::Number(_), _, ParamType::Int(n)) => {
         let number: Number = self.try_into()?;
         let i = match number {
-          Number::I(i) => try_trim_i256(i, *n)?.into_raw(),
-          Number::U(i) => try_trim_u256(i, n.saturating_sub(1))?,
+          Number::I(i) => try_trim_i256(i, *n).when("into_token", self)?.into_raw(),
+          Number::U(i) => try_trim_u256(i, n.saturating_sub(1)).when("into_token", self)?,
           _ => todo!()
         };
         Token::Int(i)

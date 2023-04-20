@@ -6,6 +6,7 @@ use ethers::signers::LocalWallet;
 use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
+use crate::convert::conv::try_convert_hex_to_bytes;
 use crate::typing::{CodeId, self};
 use crate::vm::{ValueKind, Value, ValueId, ValueKey};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
@@ -279,7 +280,7 @@ impl ValueKind {
       Type::Global(_) => todo!(),
       Type::ContractType(_) => todo!(),
       Type::Address | Type::Contract(_) | Type::Abi(ParamType::Address) => {
-        Self::Address(try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "parse addr")?)
+        Self::Address(try_convert_hex_to_addr(s).map_err(|_| "parse addr")?)
       }
       Type::Abi(_) => todo!(),
       Type::Bool => match s {
@@ -289,7 +290,7 @@ impl ValueKind {
       },
       Type::String => Self::String(unescape_str(s)?),
       Type::Bytes | Type::Wallet => {
-        let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).unwrap();
+        let bytes = try_convert_hex_to_bytes(s).map_err(|_| "parse bytes")?;
         match ty {
           // StringPrefix::None => unreachable!(),
           Type::Bytes => Self::Bytes(bytes),
@@ -327,7 +328,7 @@ impl FromStr for ValueKey {
     let result = if s.starts_with("$") {
       ValueKey::Idx(s[1..].parse::<usize>().map_err(|_| "idx not number")?)
     } else if s.starts_with("0x") {
-      let addr = try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "addr convert failed")?;
+      let addr = try_convert_hex_to_addr(s).map_err(|_| "addr convert failed")?;
       ValueKey::Address(addr)
     } else if s.starts_with('@') {
       ValueKey::String(s[1..].to_string())

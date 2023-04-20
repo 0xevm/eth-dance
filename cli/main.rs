@@ -76,7 +76,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
   std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;
 
   let cache: out::cache::Output = serde_json::from_str(&std::fs::read_to_string(format!("{}/cache.json", opts.out))?)?;
-  let contracts = out::contract::gen(&cache.vars);
+  let contracts = out::contract::gen(&cache.vars, &state.modules);
   std::fs::write(format!("{}/contracts.json", opts.out), serde_json::to_string_pretty(&contracts)?)?;
   Ok(())
 }

@@ -71,19 +71,20 @@ impl<T, E: Into<ErrorKind>> ErrorExt<T> for Result<T, E> {
   }
 }
 
-pub fn try_convert_hex_to_bytes(mut input: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn try_convert_hex_to_bytes<B: AsRef<[u8]>>(input: B) -> Result<Vec<u8>, ErrorKind> {
   // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
+  let mut input = input.as_ref();
   if input.starts_with("0x".as_bytes()) {
     input = &input[2..];
   }
-  let result = hex::decode(input).map_err(ErrorKind::custom_error).context("hex_to_bytes")?;
+  let result = hex::decode(input).map_err(ErrorKind::custom_error)?;
   Ok(result)
 }
 
-pub fn try_convert_hex_to_addr(mut input: &[u8]) -> Result<Address, Error> {
+pub fn try_convert_hex_to_addr<B: AsRef<[u8]>>(input: B) -> Result<Address, ErrorKind> {
   // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
   let bytes = try_convert_hex_to_bytes(input)?;
-  if bytes.len() != 20 { return Err(ErrorKind::custom("bytes len != 20")).context("hex_to_bytes") }
+  if bytes.len() != 20 { return Err(ErrorKind::custom("bytes len != 20")) }
   let mut i = [0u8; 20];
   i.copy_from_slice(&bytes);
   Ok(i.into())
@@ -95,21 +96,21 @@ pub fn try_convert_u256_to_h256(i: U256) -> H256 {
   H256::from(bytes)
 }
 
-pub fn try_trim_u256(i: U256, n: usize) -> Result<U256> {
+pub fn try_trim_u256(i: U256, n: usize) -> Result<U256, ErrorKind> {
   if n == 256 { return Ok(i) }
   if i >= U256::from(2).pow(U256::from(n)) {
-    return Err(ErrorKind::OutOfBounds(n)).context("trim_u256")
+    return Err(ErrorKind::OutOfBounds(n))
   }
   Ok(i)
 }
 
-pub fn try_trim_i256(i: I256, n: usize) -> Result<I256> {
+pub fn try_trim_i256(i: I256, n: usize) -> Result<I256, ErrorKind> {
   if n == 256 { return Ok(i) }
   if i >= I256::from(2).pow(n as _) {
-    return Err(ErrorKind::OutOfBounds(n)).context("trim_i256")
+    return Err(ErrorKind::OutOfBounds(n))
   }
   if i < -I256::from(2).pow(n as _) {
-    return Err(ErrorKind::OutOfBounds(n)).context("trim_i256")
+    return Err(ErrorKind::OutOfBounds(n))
   }
   Ok(i)
 }

@@ -228,16 +228,23 @@ impl Modules {
   }
 
   pub fn insert(&mut self, module: Module) {
-    // let module_name = module.name.to_string();
+    let module_name = module.name.to_string();
     self.modules.insert(module.name.to_string(), module);
+    self.contracts.insert(module_name.to_string(), module_name.to_string());
     // self.contracts.insert(name.to_string(), module_name.to_string());
     // self.contract_names.insert(module_name.to_string(), name);
   }
   pub fn get(&self, name: &str) -> Option<&Module> {
-    self.modules.get(name)
+    self.modules.get(name).or_else(||
+      self.contracts.get(name).and_then(|n| self.modules.get(n))
+    )
   }
   pub fn contains(&self, name: &str) -> bool {
     self.modules.contains_key(name)
+  }
+  pub fn set_name(&mut self, display_name: &str, name: &str) {
+    self.contracts.insert(display_name.to_string(), name.to_string());
+    self.contract_names.insert(name.to_string(), display_name.to_string());
   }
 }
 
@@ -372,6 +379,10 @@ pub fn parse_stmt_types(state: &mut Typing, stmt: &StmtKind) -> Result<bool> {
           ExprKind::Ident(i) => i.to_string(),
           _ => unreachable!("lhs must be ident"),
         };
+        match &ty {
+          Type::ContractType(contract_name) => state.modules.set_name(&name, contract_name),
+          _ => {}
+        }
         state.get_info(id).should = Some(ty);
         state.get_info(id).display = name.to_string();
         state.scopes.insert(name, id).when(&lhs.span)?;

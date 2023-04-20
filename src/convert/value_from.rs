@@ -89,10 +89,10 @@ impl TryFrom<TypedString> for Value {
       },
       StringPrefix::Hex | StringPrefix::Key | StringPrefix::Bytecode => {
         // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
-        try_convert_hex_to_bytes(value.value.as_slice())?
+        try_convert_hex_to_bytes(value.value.as_slice()).context("try_from TypedString")?
       }
       StringPrefix::Address => {
-        let addr = try_convert_hex_to_bytes(value.value.as_slice())?;
+        let addr = try_convert_hex_to_bytes(value.value.as_slice()).context("try_from TypedString")?;
         return Ok(Value::from_address(Address::from_slice(&addr), None))
       }
       StringPrefix::Byte => {
