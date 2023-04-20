@@ -9,7 +9,7 @@ use crate::{
   ast::{TypedNumber, TypedString, StringPrefix, NumberSuffix}, typing::Type,
 };
 
-use super::{conv::{try_convert_hex_to_bytes, ErrorKindExt, ErrorKind}, Error, value_into::Number};
+use super::{conv::{try_convert_hex_to_bytes, ErrorExt, ErrorKind}, Error, value_into::Number};
 
 impl Value {
   pub fn from_address(address: Address, name: Option<String>) -> Self {
@@ -51,7 +51,7 @@ impl Value {
 }
 
 impl TryFrom<Number> for Value {
-  type Error = &'static str;
+  type Error = Error;
   fn try_from(value: Number) -> Result<Self, Self::Error> {
     let result = match value {
       Number::I(i) =>
@@ -59,8 +59,8 @@ impl TryFrom<Number> for Value {
       Number::U(i) =>
         Value::from_number(BigDecimal::from_str(&i.to_string()).unwrap(), NumberSuffix::None),
       Number::F(_) => {
-        let f: f64 = value.try_into().map_err(|_| "convert f64 from Number in ValueKind")?;
-        let base = BigDecimal::from_f64(f).ok_or_else(|| "convert f64 from Number in ValueKind")?;
+        let f: f64 = value.try_into()?;
+        let base = BigDecimal::from_f64(f).ok_or_else(|| ErrorKind::custom("convert f64 from Number in ValueKind")).context("from number")?;
         // ValueKind::Number(BigDecimal, ())
         Value::from_number(base, NumberSuffix::F(64))
       }
@@ -70,10 +70,10 @@ impl TryFrom<Number> for Value {
 }
 
 impl TryFrom<TypedNumber> for Value {
-  type Error = &'static str;
+  type Error = Error;
   fn try_from(value: TypedNumber) -> Result<Self, Self::Error> {
     trace!("try_from(Value<=TypedNumber): {:?}", value.suffix);
-    let base = bigdecimal::BigDecimal::from_str(&value.value).map_err(|_| "convert to BigDecimal failed")?;
+    let base = bigdecimal::BigDecimal::from_str(&value.value).context("from typed_number")?;
     return Ok(Value::from_number(base, value.suffix));
   }
 }
@@ -84,7 +84,7 @@ impl TryFrom<TypedString> for Value {
   fn try_from(value: TypedString) -> std::result::Result<Self, Self::Error> {
     let bytes = match value.prefix {
       StringPrefix::None => {
-        let string = String::from_utf8(value.value).map_err(ErrorKind::from).when("try_from")?;
+        let string = String::from_utf8(value.value).context("try_from TypedString")?;
         return Ok(Value::from_string(string))
       },
       StringPrefix::Hex | StringPrefix::Key | StringPrefix::Bytecode => {
@@ -103,7 +103,7 @@ impl TryFrom<TypedString> for Value {
     };
     match value.prefix {
       StringPrefix::Key => {
-        let wallet = LocalWallet::from_bytes(&bytes).map_err(ErrorKind::from).when("try_from")?;
+        let wallet = LocalWallet::from_bytes(&bytes).context("try_from TypedString")?;
         return Ok(Value::from_wallet(wallet))
       }
       StringPrefix::Bytecode => {

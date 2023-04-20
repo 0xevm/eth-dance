@@ -15,7 +15,7 @@ use ethers::{
 use crate::{typing::Type, vm::{ValueKind, Value}};
 
 use self::{
-  conv::{try_trim_u256, try_trim_i256, ErrorKind},
+  conv::{try_trim_u256, try_trim_i256},
   value_into::Number
 };
 
@@ -58,8 +58,8 @@ impl Value {
       Token::Address(addr) => Value::from_address(addr, None),
       Token::FixedBytes(i) | Token::Bytes(i)
         => Value::from_bytes(i),
-      Token::Int(i) => Number::I(I256::from_raw(i)).try_into().map_err(|e| ErrorKind::Number(e).when("from_token"))?,
-      Token::Uint(i) => Number::U(i).try_into().map_err(|e| ErrorKind::Number(e).when("from_token"))?,
+      Token::Int(i) => Number::I(I256::from_raw(i)).try_into()?,
+      Token::Uint(i) => Number::U(i).try_into()?,
       Token::Bool(i) => Value::from_bool(i),
       Token::String(i) => Value::from_string(i),
       Token::FixedArray(i) | Token::Array(i) => {
