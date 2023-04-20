@@ -5,8 +5,8 @@ use ethers::signers::LocalWallet;
 use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
-use crate::typing::{Id, self};
-use crate::vm::{ValueKind, Value};
+use crate::typing::{CodeId, self};
+use crate::vm::{ValueKind, Value, ValueId};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
 impl Display for Ident {
@@ -132,13 +132,15 @@ impl FromStr for Type {
   }
 }
 
-impl std::fmt::Display for Id {
+impl std::fmt::Display for CodeId {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    if self.1 == 0 {
-      write!(f, "$${}", self.0)
-    } else {
-      write!(f, "$${}[{}]", self.0, self.1)
-    }
+    write!(f, "$${}", self.0)
+  }
+}
+
+impl std::fmt::Display for ValueId {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "$${}.{}", self.0, self.1)
   }
 }
 

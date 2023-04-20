@@ -10,9 +10,11 @@ use ethers::{
 };
 
 use crate::{
-  typing::{Typing, ExprCode, Id, Type, Info},
+  typing::{Typing, ExprCode, CodeId, Type, Info},
   abi::Func,
 };
+
+pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
 
 // pub struct Error {
 
@@ -74,17 +76,31 @@ impl Value {
   }
 }
 
-pub type Provider = ethers::providers::Provider<ethers::providers::Http>;
+pub struct ValueInfo {
+  pub name: String,
+  pub keys: Vec<CodeId>,
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ValueId(pub u64, pub u64);
+impl ValueId {
+  pub fn next_gen(self) -> Self {
+    Self(self.0, self.1+1)
+  }
+  pub fn code(self) -> CodeId {
+    CodeId(self.0)
+  }
+}
 #[derive(Debug, Default)]
 pub struct BuiltIn {
   pub wallet: Option<LocalWallet>,
   pub confirm_interval: Option<f64>,
 }
 pub struct VM {
-  pub generation: BTreeMap<Id, Id>,
-  pub values: BTreeMap<Id, Value>,
-  pub builtin: BTreeMap<String, Id>,
+  pub generation: BTreeMap<CodeId, ValueId>,
+  pub values: BTreeMap<ValueId, Value>,
+  pub infos: BTreeMap<ValueId, ValueInfo>,
+  pub builtin: BTreeMap<String, ValueId>,
   pub state: BuiltIn,
   pub provider: Provider,
 }
@@ -94,12 +110,13 @@ impl VM {
     Self {
       generation: Default::default(),
       values: Default::default(),
+      infos: Default::default(),
       builtin: Default::default(),
       state: Default::default(),
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
   }
-  pub fn set_builtin(&mut self, name: &str, id: Id, value: &Value) {
+  pub fn set_builtin(&mut self, name: &str, id: ValueId, value: &Value) {
     match name {
       "$endpoint" => match &value.v {
         ValueKind::String(s) => {
@@ -123,23 +140,22 @@ impl VM {
     };
     self.builtin.insert(name.to_string(), id);
   }
-  pub fn get_value(&self, id: Id) -> Option<&Value> {
+  pub fn get_value(&self, id: CodeId) -> Option<&Value> {
     if let Some(id) = self.generation.get(&id) {
       self.values.get(id)
     } else {
-      self.values.get(&id)
+      None
     }
   }
-  pub fn set_value(&mut self, id: Id, info: &Info, value: Value) -> Result<()> {
-    trace!("set_value: {} = {}", id, value.show());
+  pub fn set_value(&mut self, code_id: CodeId, info: &Info, value: Value) -> Result<()> {
+    let value_id = self.generation.entry(code_id).or_insert(ValueId(code_id.0, 0)).next_gen();
+    self.generation.insert(code_id, value_id);
+    trace!("set_value: {} {} = {}", code_id, value_id, value.show());
     // let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
-      self.set_builtin(&info.display, id, &value);
+      self.set_builtin(&info.display, value_id, &value);
     }
-    let latest = self.generation.entry(Id(id.0, 0)).or_insert(id);
-    let id = Id(id.0, latest.1+1);
-    self.generation.insert(Id(id.0, 0), id);
-    self.values.insert(id, value);
+    self.values.insert(value_id, value);
     Ok(())
   }
   // pub fn get_address(&self, id: Id) -> Option<Address> {
@@ -164,15 +180,13 @@ impl ExprCode {
     const MAX_LEN: usize = 500;
     let expand = |c: &regex::Captures| -> String {
       let id_0 = c.get(1).unwrap().as_str().parse::<u64>().unwrap();
-      let id_1_str = c.get(3).map(|i| i.as_str()).unwrap_or("0");
-      let id_1 = id_1_str.parse::<u64>().unwrap();
-      let id = Id(id_0, id_1);
+      let id = CodeId(id_0);
       match vm.get_value(id) {
         Some(a) => a.show(),
         None => format!("~{}~", id),
       }
     };
-    let re = regex::Regex::new(r"\$\$(\d+)(\[(\d+)\])?").unwrap();
+    let re = regex::Regex::new(r"\$\$(\d+)").unwrap();
     let code_str = self.to_string();
     let code_str = re.replace_all(&code_str, expand);
     if code_str.len() > MAX_LEN {
@@ -183,8 +197,8 @@ impl ExprCode {
   }
 }
 
-pub fn execute(vm: &mut VM, typing: &Typing, start: Option<Id>, end: Option<Id>) -> Result<()> {
-  let mut skipping = Id(0, 0);
+pub fn execute(vm: &mut VM, typing: &Typing, start: Option<CodeId>, end: Option<CodeId>) -> Result<()> {
+  let mut skipping = CodeId(0);
   info!("execute: {:?} {:?}", start, end);
   let code_range = typing.infos.iter()
     .skip_while(|(id, _)| start.is_some() && **id <= start.unwrap()) // <= means exclude start

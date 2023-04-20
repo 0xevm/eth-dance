@@ -144,13 +144,13 @@ impl Type {
 #[derive(Debug, Default)]
 pub enum ExprCode {
   #[default] None,
-  Func { func: Func, this: Option<Id>, args: Vec<Id>, send: bool },
-  Convert(Id, Option<Type>),
+  Func { func: Func, this: Option<CodeId>, args: Vec<CodeId>, send: bool },
+  Convert(CodeId, Option<Type>),
   String(TypedString),
   Number(TypedNumber),
   List(Vec<ExprCode>),
-  Loop(Id, Id),
-  EndLoop(Id),
+  Loop(CodeId, CodeId),
+  EndLoop(CodeId),
 }
 
 #[derive(Debug, Default)]
@@ -167,7 +167,7 @@ pub struct Info {
   pub display: String,
   pub span: Span,
   pub expr_span: Span,
-  pub keys: Vec<Id>,
+  pub keys: Vec<CodeId>,
 }
 
 impl Info {
@@ -179,22 +179,22 @@ impl Info {
 // You could not shallow names in different scope
 #[derive(Debug, Clone)]
 pub struct Scopes {
-  pub stack: Vec<Id>,
-  pub scopes: BTreeMap<Id, BTreeMap<String, Id>>,
-  pub symbols: BTreeMap<String, (Id, Id)>,
-  pub latest: BTreeMap<String, Id>,
+  pub stack: Vec<CodeId>,
+  pub scopes: BTreeMap<CodeId, BTreeMap<String, CodeId>>,
+  pub symbols: BTreeMap<String, (CodeId, CodeId)>,
+  pub latest: BTreeMap<String, CodeId>,
 }
 
 impl Scopes {
   pub fn new() -> Self {
-    let init = Id(0, 0);
+    let init = CodeId(0);
     let mut scopes = BTreeMap::new();
     scopes.insert(init, Default::default());
     Self {
       stack: vec![init], scopes, symbols: Default::default(), latest: Default::default(),
     }
   }
-  pub fn insert(&mut self, name: String, id: Id) -> Result<(), ErrorKind> {
+  pub fn insert(&mut self, name: String, id: CodeId) -> Result<(), ErrorKind> {
     let current = *self.stack.last().unwrap();
     let current_scope = self.scopes.get_mut(&current).unwrap();
     current_scope.insert(name.to_string(), id);
@@ -202,7 +202,7 @@ impl Scopes {
     self.latest.insert(name.to_string(), id);
     Ok(())
   }
-  pub fn enter_scope(&mut self, id: Id) {
+  pub fn enter_scope(&mut self, id: CodeId) {
     self.scopes.insert(id, Default::default());
     self.stack.push(id);
   }
@@ -244,12 +244,12 @@ impl Modules {
 pub type ModuleName = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Id(pub u64, pub u64);
+pub struct CodeId(pub u64);
 pub struct Typing {
   pub current_file: PathBuf,
   pub working_dir: PathBuf,
-  pub last_id: Id,
-  pub infos: BTreeMap<Id, Info>,
+  pub last_id: CodeId,
+  pub infos: BTreeMap<CodeId, Info>,
   pub scopes: Scopes,
   pub modules: Modules,
 }
@@ -259,14 +259,14 @@ impl Typing {
     Self {
       current_file,
       working_dir,
-      last_id: Id(0, 0),
+      last_id: CodeId(0),
       infos: BTreeMap::new(),
       modules: Modules::new(globals()),
       scopes: Scopes::new(),
     }
   }
 
-  pub fn add_module(&mut self, contract: Module, span: &Span) -> Id {
+  pub fn add_module(&mut self, contract: Module, span: &Span) -> CodeId {
     let id = self.new_id(span);
     self.infos.entry(id).or_default();
     // self.scopes.insert(contract.name.to_string(), id);
@@ -280,8 +280,8 @@ impl Typing {
     id
   }
 
-  pub fn new_id(&mut self, span: &Span) -> Id {
-    let id = Id(self.last_id.0+1, 0);
+  pub fn new_id(&mut self, span: &Span) -> CodeId {
+    let id = CodeId(self.last_id.0+1);
     self.infos.entry(id).or_default();
     self.get_info(id).span = span.clone();
     self.get_info(id).keys = self.scopes.stack.clone();
@@ -289,26 +289,26 @@ impl Typing {
     id
   }
 
-  pub fn get_info(&mut self, id: Id) -> &mut Info {
+  pub fn get_info(&mut self, id: CodeId) -> &mut Info {
     self.infos.get_mut(&id).unwrap()
   }
 
-  pub fn get_info_view(&self, id: Id) -> &Info {
-    self.infos.get(&Id(id.0, 0)).unwrap()
+  pub fn get_info_view(&self, id: CodeId) -> &Info {
+    self.infos.get(&CodeId(id.0)).unwrap()
   }
 
-  pub fn find_name(&self, name: &str) -> Option<Id> {
+  pub fn find_name(&self, name: &str) -> Option<CodeId> {
     self.scopes.latest.get(name).copied()
   }
 
-  pub fn insert_expr(&mut self, expr: Expression) -> Id {
+  pub fn insert_expr(&mut self, expr: Expression) -> CodeId {
     let id = self.new_id(&expr.span);
     trace!("insert expr: {:?} {:?}", id, expr.code);
     self.get_info(id).expr = expr;
     id
   }
 
-  pub fn insert_name(&mut self, name: &str, span: &Span) -> Result<Id, Error> {
+  pub fn insert_name(&mut self, name: &str, span: &Span) -> Result<CodeId, Error> {
     let id = self.new_id(span);
     if name == "" {
       return Ok(id)

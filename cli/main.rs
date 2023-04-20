@@ -7,7 +7,7 @@ use clap::Parser;
 use eth_dance::{
   ast,
   typing::{self, Typing},
-  vm::{self, VM, ValueKind}, out
+  vm::{self, VM}, out
 };
 
 #[derive(clap::Parser)]

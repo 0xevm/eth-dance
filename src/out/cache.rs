@@ -31,11 +31,11 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
   let mut out = Output::default();
   let mut ids_cache = BTreeMap::new();
   for (id, value) in &vm.values {
-    let name = match typing.get_info_view(*id).display.clone() {
+    let name = match typing.get_info_view(id.code()).display.clone() {
       s if s.starts_with("$$") || s.is_empty() => None,
       s => Some(s),
     };
-    let ty = typing.get_info_view(*id).ty().clone();
+    let ty = typing.get_info_view(id.code()).ty().clone();
     let v = match ty {
       Type::ContractType(_) => None,
       _ => Some(value.clone()),
