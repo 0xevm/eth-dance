@@ -20,7 +20,7 @@ number_suffix = @{
   "u"? ~ "q" ~ int? |
   "eth" | "gwei"
 }
-number = { (float | int) ~ number_suffix? }
+number = ${ (float | int) ~ number_suffix? }
 fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
 
 // https://github.com/pest-parser/book/blob/master/src/examples/rust/literals.md#strings

@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
+use ethabi::ParamType;
 use ethers::signers::LocalWallet;
 use ethers::utils::to_checksum;
 
@@ -277,7 +278,7 @@ impl ValueKind {
       Type::NoneType => Self::Bytes(vec![]),
       Type::Global(_) => todo!(),
       Type::ContractType(_) => todo!(),
-      Type::Address | Type::Contract(_) => {
+      Type::Address | Type::Contract(_) | Type::Abi(ParamType::Address) => {
         Self::Address(try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "parse addr")?)
       }
       Type::Abi(_) => todo!(),
@@ -315,7 +316,7 @@ impl Display for ValueKey {
     match self {
       ValueKey::Idx(i) => write!(f, "${}", i),
       ValueKey::Address(addr) => write!(f, "0x{}", to_checksum(addr, None)),
-      ValueKey::String(s) => write!(f, "{:?}", s),
+      ValueKey::String(s) => write!(f, "@{}", s),
     }
   }
 }
@@ -328,8 +329,8 @@ impl FromStr for ValueKey {
     } else if s.starts_with("0x") {
       let addr = try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "addr convert failed")?;
       ValueKey::Address(addr)
-    } else if s.starts_with('"') {
-      ValueKey::String(unescape_str(s)?)
+    } else if s.starts_with('@') {
+      ValueKey::String(s[1..].to_string())
     } else {
       return Err("unknown value_key")
     };

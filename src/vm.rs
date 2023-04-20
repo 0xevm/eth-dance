@@ -144,7 +144,7 @@ impl VM {
     let keys = self.get_keys(id)?;
     let mut s = if info.name.is_empty() { format!("{}", id) } else { info.name.clone() };
     for i in keys {
-      s += &format!("[{}]", i);
+      s += &format!(".{}", i);
     }
     Some(s)
   }
