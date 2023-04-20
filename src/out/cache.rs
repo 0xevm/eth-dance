@@ -5,14 +5,19 @@ use serde::{Serialize, Deserialize};
 
 use crate::{
   typing::{Type, Typing},
-  vm::{VM, Value},
+  vm::{VM, Value, ValueKey, ValueId},
 };
 
 #[serde_with::serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
-  pub id: (u64, u64),
-  pub name: Option<String>,
+  #[serde_as(as = "serde_with::DisplayFromStr")]
+  pub id: ValueId,
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  pub name: String,
+  #[serde_as(as = "Vec<serde_with::DisplayFromStr>")]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub keys: Vec<ValueKey>,
   #[serde_as(as = "Option<serde_with::DisplayFromStr>")]
   #[serde(skip_serializing_if = "Option::is_none")]
   pub value: Option<Value>,
@@ -40,10 +45,11 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
       Type::ContractType(_) => None,
       _ => Some(value.clone()),
     };
-    let id = (id.0, id.1);
+    let info = vm.infos.get(id).unwrap().clone();
+    let keys = vm.get_keys(*id).unwrap();
     let mut item = Item {
-      id, name: name.clone(),
-      value: v,
+      name: info.name.clone(), keys,
+      id: *id, value: v,
       value_hash: ethers::utils::keccak256(value.v.repr_str().as_bytes()).into(),
     };
     if let Some(name) = name {

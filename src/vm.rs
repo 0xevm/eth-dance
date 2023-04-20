@@ -41,23 +41,11 @@ pub struct Value {
   pub ty: Type,
 }
 
-impl std::fmt::Debug for ValueKind {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
-      Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
-      Self::Address(arg0) => f.debug_tuple("Address").field(arg0).finish(),
-      Self::Wallet(arg0) => f.debug_tuple("Wallet").field(arg0).finish(),
-      Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
-      Self::Bytes(arg0) => f.debug_tuple("Bytes").field(arg0).finish(),
-      Self::Bytecode(arg0) => {
-        // TODO: show
-        f.debug_tuple("Bytecode").field(&[arg0.len()]).finish()
-      }
-      Self::Array(arg0, arg1) => f.debug_tuple("Array").field(arg0).field(arg1).finish(),
-      Self::Tuple(arg0) => f.debug_tuple("Tuple").field(arg0).finish(),
-    }
-  }
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ValueKey {
+  Idx(usize),
+  Address(Address),
+  String(String),
 }
 
 impl Value {
@@ -76,11 +64,6 @@ impl Value {
   }
 }
 
-pub struct ValueInfo {
-  pub name: String,
-  pub keys: Vec<CodeId>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ValueId(pub u64, pub u64);
 impl ValueId {
@@ -91,6 +74,13 @@ impl ValueId {
     CodeId(self.0)
   }
 }
+
+#[derive(Debug, Clone)]
+pub struct ValueInfo {
+  pub name: String,
+  pub keys: Vec<(ValueId, usize)>,
+}
+
 #[derive(Debug, Default)]
 pub struct BuiltIn {
   pub wallet: Option<LocalWallet>,
@@ -101,6 +91,7 @@ pub struct VM {
   pub values: BTreeMap<ValueId, Value>,
   pub infos: BTreeMap<ValueId, ValueInfo>,
   pub builtin: BTreeMap<String, ValueId>,
+  pub loop_idxes: Vec<(ValueId, usize)>,
   pub state: BuiltIn,
   pub provider: Provider,
 }
@@ -112,6 +103,7 @@ impl VM {
       values: Default::default(),
       infos: Default::default(),
       builtin: Default::default(),
+      loop_idxes: Default::default(),
       state: Default::default(),
       provider: Provider::try_from("http://localhost:8545").unwrap(),
     }
@@ -140,6 +132,13 @@ impl VM {
     };
     self.builtin.insert(name.to_string(), id);
   }
+  pub fn get_keys(&self, id: ValueId) -> Option<Vec<ValueKey>> {
+    let info = self.infos.get(&id)?;
+    let result = info.keys.iter().map(|(id, idx)| {
+      self.values.get(id).and_then(Value::as_value_key).unwrap_or_else(|| ValueKey::Idx(*idx))
+    }).collect();
+    Some(result)
+  }
   pub fn get_value(&self, id: CodeId) -> Option<&Value> {
     if let Some(id) = self.generation.get(&id) {
       self.values.get(id)
@@ -147,7 +146,7 @@ impl VM {
       None
     }
   }
-  pub fn set_value(&mut self, code_id: CodeId, info: &Info, value: Value) -> Result<()> {
+  pub fn set_value(&mut self, code_id: CodeId, info: &Info, value: Value) -> Result<ValueId> {
     let value_id = self.generation.entry(code_id).or_insert(ValueId(code_id.0, 0)).next_gen();
     self.generation.insert(code_id, value_id);
     trace!("set_value: {} {} = {}", code_id, value_id, value.show());
@@ -156,7 +155,12 @@ impl VM {
       self.set_builtin(&info.display, value_id, &value);
     }
     self.values.insert(value_id, value);
-    Ok(())
+    let info = ValueInfo {
+      name: info.display.clone(),
+      keys: self.loop_idxes.clone(),
+    };
+    self.infos.insert(value_id, info);
+    Ok(value_id)
   }
   // pub fn get_address(&self, id: Id) -> Option<Address> {
   //   match self.get_value(&id)?.token {
@@ -179,14 +183,13 @@ impl ExprCode {
   pub fn show_var(&self, vm: &VM) -> String {
     const MAX_LEN: usize = 500;
     let expand = |c: &regex::Captures| -> String {
-      let id_0 = c.get(1).unwrap().as_str().parse::<u64>().unwrap();
-      let id = CodeId(id_0);
+      let id = c.get(1).unwrap().as_str().parse::<CodeId>().unwrap();
       match vm.get_value(id) {
         Some(a) => a.show(),
         None => format!("~{}~", id),
       }
     };
-    let re = regex::Regex::new(r"\$\$(\d+)").unwrap();
+    let re = regex::Regex::new(r"(\$\$\d+)").unwrap();
     let code_str = self.to_string();
     let code_str = re.replace_all(&code_str, expand);
     if code_str.len() > MAX_LEN {
@@ -216,15 +219,19 @@ pub fn execute(vm: &mut VM, typing: &Typing, start: Option<CodeId>, end: Option<
         let Some(range) = vm.get_value(*scope).cloned() else {
           bail!("scope range {} not present", scope);
         };
+        vm.loop_idxes.push((ValueId(id.0, 0), 0));
         match range.v {
           ValueKind::Array(arr, ty) => {
-            for item in arr {
-              vm.set_value(*id, info, Value::new(item, ty.clone())?)?;
+            for (idx, item) in arr.into_iter().enumerate() {
+              let value_id = vm.set_value(*id, info, Value::new(item, ty.clone())?)?;
+              *vm.loop_idxes.last_mut().unwrap() = (value_id, idx+1);
+              vm.infos.get_mut(&value_id).unwrap().keys = vm.loop_idxes.clone();
               execute(vm, typing, Some(*id), Some(*stop))?;
             }
           }
           _ => bail!("scope range {} not iteratable: {}", scope, range.ty),
         }
+        vm.loop_idxes.pop();
         continue
       }
       ExprCode::EndLoop(_) => {

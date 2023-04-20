@@ -6,8 +6,10 @@ use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
 use crate::typing::{CodeId, self};
-use crate::vm::{ValueKind, Value, ValueId};
+use crate::vm::{ValueKind, Value, ValueId, ValueKey};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
+
+use super::conv::try_convert_hex_to_addr;
 
 impl Display for Ident {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -137,10 +139,38 @@ impl std::fmt::Display for CodeId {
     write!(f, "$${}", self.0)
   }
 }
-
 impl std::fmt::Display for ValueId {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     write!(f, "$${}.{}", self.0, self.1)
+  }
+}
+impl std::str::FromStr for CodeId {
+  type Err = &'static str;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    let re = regex::Regex::new(r"\$\$(\d+)").unwrap();
+    let Some(m) = re.captures(s) else {
+      return Err("no match");
+    };
+    assert_eq!(m.len(), 2);
+    if m.get(0).unwrap().as_str().len() != s.len() { return Err("extra string") }
+    let id_0 = m.get(1).unwrap().as_str().parse().map_err(|_| "parse u64")?;
+    Ok(CodeId(id_0))
+  }
+}
+impl std::str::FromStr for ValueId {
+  type Err = &'static str;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    let re = regex::Regex::new(r"\$\$(\d+)\.(\d+)").unwrap();
+    let Some(m) = re.captures(s) else {
+      return Err("no match");
+    };
+    assert_eq!(m.len(), 3);
+    if m.get(0).unwrap().as_str().len() != s.len() { return Err("extra string") }
+    let id_0 = m.get(1).unwrap().as_str().parse().map_err(|_| "parse u64")?;
+    let id_1 = m.get(2).unwrap().as_str().parse().map_err(|_| "parse u64")?;
+    Ok(ValueId(id_0, id_1))
   }
 }
 
@@ -207,6 +237,25 @@ impl FromStr for Value {
   }
 }
 
+impl std::fmt::Debug for ValueKind {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
+      Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
+      Self::Address(arg0) => f.debug_tuple("Address").field(arg0).finish(),
+      Self::Wallet(arg0) => f.debug_tuple("Wallet").field(arg0).finish(),
+      Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
+      Self::Bytes(arg0) => f.debug_tuple("Bytes").field(arg0).finish(),
+      Self::Bytecode(arg0) => {
+        // TODO: show
+        f.debug_tuple("Bytecode").field(&[arg0.len()]).finish()
+      }
+      Self::Array(arg0, arg1) => f.debug_tuple("Array").field(arg0).field(arg1).finish(),
+      Self::Tuple(arg0) => f.debug_tuple("Tuple").field(arg0).finish(),
+    }
+  }
+}
+
 impl ValueKind {
   pub fn repr_str(&self) -> String {
     match self {
@@ -259,6 +308,33 @@ impl ValueKind {
         let v = s[1..s.len()-1].split(",").map(|i| Self::parse_str(i.trim(), inner.as_ref())).collect::<Result<_, _>>()?;
         Self::Array(v, inner.as_ref().clone())
       },
+    };
+    Ok(result)
+  }
+}
+
+impl Display for ValueKey {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    match self {
+      ValueKey::Idx(i) => write!(f, "${}", i),
+      ValueKey::Address(addr) => write!(f, "0x{}", to_checksum(addr, None)),
+      ValueKey::String(s) => write!(f, "{:?}", s),
+    }
+  }
+}
+impl FromStr for ValueKey {
+  type Err = &'static str;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    let result = if s.starts_with("$") {
+      ValueKey::Idx(s[1..].parse::<usize>().map_err(|_| "idx not number")?)
+    } else if s.starts_with("0x") {
+      let addr = try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "addr convert failed")?;
+      ValueKey::Address(addr)
+    } else if s.starts_with('"') {
+      ValueKey::String(unescape_str(s)?)
+    } else {
+      return Err("unknown value_key")
     };
     Ok(result)
   }

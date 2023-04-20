@@ -4,7 +4,7 @@ use bigdecimal::{FromPrimitive, num_bigint::BigInt, BigDecimal};
 use ethers::types::{Address, I256, U256};
 
 use crate::{
-  vm::{Value, ValueKind},
+  vm::{Value, ValueKind, ValueKey},
   ast::NumberSuffix,
   typing::Type,
 };
@@ -34,6 +34,14 @@ impl Value {
         => Some((base, *suffix)),
       _ => None,
     }
+  }
+  pub fn as_value_key(&self) -> Option<ValueKey> {
+    let key = match &self.v {
+      ValueKind::Address(addr) => ValueKey::Address(*addr),
+      ValueKind::String(string) => ValueKey::String(string.clone()),
+      _ => return None,
+    };
+    Some(key)
   }
 }
 

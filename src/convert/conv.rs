@@ -1,5 +1,6 @@
 use std::{string::FromUtf8Error, num::ParseFloatError};
 
+use ethabi::Address;
 use ethers::types::{I256, U256, H256};
 
 use crate::vm::Value;
@@ -77,6 +78,15 @@ pub fn try_convert_hex_to_bytes(mut input: &[u8]) -> Result<Vec<u8>, Error> {
   }
   let result = hex::decode(input).map_err(ErrorKind::custom_error).context("hex_to_bytes")?;
   Ok(result)
+}
+
+pub fn try_convert_hex_to_addr(mut input: &[u8]) -> Result<Address, Error> {
+  // let str = String::from_utf8(value.value).map_err(|_| "utf8")?;
+  let bytes = try_convert_hex_to_bytes(input)?;
+  if bytes.len() != 20 { return Err(ErrorKind::custom("bytes len != 20")).context("hex_to_bytes") }
+  let mut i = [0u8; 20];
+  i.copy_from_slice(&bytes);
+  Ok(i.into())
 }
 
 pub fn try_convert_u256_to_h256(i: U256) -> H256 {
