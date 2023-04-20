@@ -9,7 +9,8 @@ impl Value {
     }
     let result = match (&self.ty, &self.v, ty) {
       (Type::Number(_), ValueKind::Number(_), Type::Number(_)) |
-      (Type::Bytes, ValueKind::Bytecode(_), Type::ContractType(_))
+      (Type::Bytes, ValueKind::Bytecode(_), Type::ContractType(_)) |
+      (Type::Address, ValueKind::Address(_), Type::Contract(_))
         => Value { ty: ty.clone(), ..self },
       _ => {
         warn!("unknown convert {} {}", self.ty, ty);

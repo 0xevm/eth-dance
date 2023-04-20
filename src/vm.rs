@@ -139,6 +139,15 @@ impl VM {
     }).collect();
     Some(result)
   }
+  pub fn get_display_name(&self, id: ValueId) -> Option<String> {
+    let info = self.infos.get(&id)?;
+    let keys = self.get_keys(id)?;
+    let mut s = if info.name.is_empty() { format!("{}", id) } else { info.name.clone() };
+    for i in keys {
+      s += &format!("[{}]", i);
+    }
+    Some(s)
+  }
   pub fn get_value(&self, id: CodeId) -> Option<&Value> {
     if let Some(id) = self.generation.get(&id) {
       self.values.get(id)

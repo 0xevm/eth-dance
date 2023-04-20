@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use ethabi::ethereum_types::H256;
+use ethers::utils::to_checksum;
 use serde::{Serialize, Deserialize};
 
 use crate::{typing::Type, vm::Value};
@@ -21,7 +22,7 @@ pub fn gen(items: &BTreeMap<String, Item>) -> BTreeMap<String, ContractItem> {
   let mut result = BTreeMap::new();
   for (n, v) in items {
     if let Some(addr) = &v.value.as_ref().and_then(Value::as_address) {
-      let mut item = ContractItem { address: addr.to_string(), contract_path: None, bytecode_hash: None };
+      let mut item = ContractItem { address: to_checksum(addr, None), contract_path: None, bytecode_hash: None };
       if let Some(Type::Contract(contract_name)) = &v.value.as_ref().map(|i| &i.ty) {
         item.bytecode_hash = items.get(contract_name).map(|i| i.value_hash);
         item.contract_path = Some(contract_name.to_string());

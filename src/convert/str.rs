@@ -277,7 +277,9 @@ impl ValueKind {
       Type::NoneType => Self::Bytes(vec![]),
       Type::Global(_) => todo!(),
       Type::ContractType(_) => todo!(),
-      Type::Contract(_) => todo!(),
+      Type::Address | Type::Contract(_) => {
+        Self::Address(try_convert_hex_to_addr(s.as_bytes()).map_err(|_| "parse addr")?)
+      }
       Type::Abi(_) => todo!(),
       Type::Bool => match s {
         "true" => Self::Bool(true),
@@ -285,18 +287,13 @@ impl ValueKind {
         _ => return Err("unknown bool"),
       },
       Type::String => Self::String(unescape_str(s)?),
-      Type::Bytes | Type::Wallet | Type::Address => {
+      Type::Bytes | Type::Wallet => {
         let bytes = hex::decode(s.strip_prefix("0x").unwrap_or(s)).unwrap();
         match ty {
           // StringPrefix::None => unreachable!(),
           Type::Bytes => Self::Bytes(bytes),
           // StringPrefix::Bytecode => return Ok(Self::Bytecode(bytes)),
-          Type::Wallet => return Ok(Self::Wallet(LocalWallet::from_bytes(&bytes).unwrap())),
-          Type::Address => {
-            let mut b = [0u8; 20];
-            b.copy_from_slice(&bytes);
-            Self::Address(b.into())
-          }
+          Type::Wallet => Self::Wallet(LocalWallet::from_bytes(&bytes).unwrap()),
           // StringPrefix::Contract => todo!(),
           _ => unreachable!()
         }

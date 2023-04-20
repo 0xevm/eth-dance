@@ -53,7 +53,7 @@ pub fn from_vm(vm: &VM, typing: &Typing) -> Output {
       value_hash: ethers::utils::keccak256(value.v.repr_str().as_bytes()).into(),
     };
     if let Some(name) = name {
-      out.vars.insert(name, item.clone());
+      out.vars.insert(vm.get_display_name(*id).unwrap_or(name), item.clone());
       item.value = None;
     }
     ids_cache.insert(id, item);

@@ -26,11 +26,11 @@ use self::{
 
 impl Value {
   pub fn into_token(&self, abi: &ParamType) -> Result<Token, Error> {
-    let result = match (&self.v, abi) {
-      (ValueKind::Address(addr), ParamType::Address) => Token::Address(*addr),
-      (ValueKind::Wallet(wallet), ParamType::Address) => Token::Address(wallet.address()),
+    let result = match (&self.ty, &self.v, abi) {
+      (_, ValueKind::Address(addr), ParamType::Address) => Token::Address(*addr),
+      (_, ValueKind::Wallet(wallet), ParamType::Address) => Token::Address(wallet.address()),
 
-      (_, ParamType::Uint(s)) => {
+      (Type::Number(_), _, ParamType::Uint(s)) => {
         let number: Number = self.try_into()?;
         let i = match number {
           Number::U(i) => try_trim_u256(i, *s)?,
@@ -39,7 +39,7 @@ impl Value {
         };
         Token::Uint(i)
       }
-      (_, ParamType::Int(n)) => {
+      (Type::Number(_), _, ParamType::Int(n)) => {
         let number: Number = self.try_into()?;
         let i = match number {
           Number::I(i) => try_trim_i256(i, *n)?.into_raw(),
@@ -47,6 +47,10 @@ impl Value {
           _ => todo!()
         };
         Token::Int(i)
+      }
+
+      (Type::String, ValueKind::String(s), ParamType::String) => {
+        Token::String(s.to_string())
       }
       _ => todo!("convert {:?} to {}", self, abi)
     };
