@@ -282,7 +282,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
         call_global(vm, func.clone(), &args)?
       } else if let Some(this) = this {
         let Some(this_addr) = vm.get_value(*this).and_then(Value::as_address) else {
-          anyhow::bail!("vm: this not address")
+          anyhow::bail!("vm: this not address {} = {:?}", this, vm.get_value(*this))
         };
         trace!("this_addr: {:?} {:?}", this, this_addr);
         if *send {

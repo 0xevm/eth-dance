@@ -1,6 +1,7 @@
 FILE = ${ SOI ~ block ~ EOI }
 statement = !{ forloop | assignment }
-assignment = { (item ~ "=")? ~ expr }
+assignment = { (item ~ op_eq | (!"=" ~ op_eq))? ~ expr }
+op_eq = { "=" | "<-" }
 forloop = {
   "for" ~ item ~ "in" ~ expr ~ "{"
     ~ block ~
@@ -9,9 +10,10 @@ forloop = {
 dot = { ":" | "." }
 
 args = { arg ~ ("," ~ arg)* }
-funccall = { ident? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
+funccall = { expr_item? ~ dot ~ ident ~ "(" ~ args? ~ ")" }
 
-ident = @{ ("$"|"@")? ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+ident_inner = _{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+ident = @{ "$"? ~ ident_inner | "@" ~ ident_inner? }
 int = @{ ASCII_DIGIT+ }
 float = @{ int ~ "." ~ int }
 number_suffix = @{
@@ -38,8 +40,8 @@ block = ${ (
 
 item = { ident ~ (":" ~ type)? }
 arg = { expr ~ (":" ~ type)? }
-expr = {
-  funccall |
+expr = { funccall | expr_item }
+expr_item = _{
   string |
   number |
   fixed_array |

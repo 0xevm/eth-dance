@@ -304,10 +304,16 @@ pub enum ExprKind {
   List(ExprList),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AssignOp {
+  #[default] Eq, Send,
+}
+
 #[derive(Debug, Default)]
 pub struct Assignment {
   pub lhs: Option<ExprLit>,
-  pub equal_span: Option<Span>,
+  pub op: AssignOp,
+  pub op_span: Option<Span>,
   pub rhs: ExprLit,
   pub newline_span: Option<Span>,
   pub span: Span,
@@ -394,19 +400,30 @@ fn parse_forloop(pair: Pair<Rule>) -> Result<Forloop> {
   Ok(result)
 }
 
-// statement = { (item ~ "=")? ~ expr }
+// assignment = { (item ~ op_eq | (!"=" ~ op_eq))? ~ expr }
 fn parse_assignment(pair: Pair<Rule>) -> Result<Assignment, Vec<Error>> {
   assert_eq!(pair.as_rule(), Rule::assignment);
   let span: Span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = Assignment::default();
-  let pair = pairs.peek();
   let mut errors = Vec::new();
-  match pair.as_ref().map(Pair::as_rule) {
+  match pairs.peek().as_ref().map(Pair::as_rule) {
     Some(Rule::item) => {
       match parse_item(pairs.next().unwrap()) {
         Ok(expr) => result.lhs = Some(expr),
         Err(e) => errors.push(e)
+      }
+    }
+    _ => {},
+  }
+  match pairs.peek().as_ref().map(Pair::as_rule) {
+    Some(Rule::op_eq) => {
+      let pair = pairs.next().unwrap();
+      result.op_span = Some(pair.as_span().into());
+      result.op = match pair.as_str() {
+        "=" => AssignOp::Eq,
+        "<-" => AssignOp::Send,
+        _ => unreachable!(),
       }
     }
     _ => {},
@@ -542,13 +559,15 @@ fn parse_ident(pair: Pair<Rule>) -> Result<Ident> {
   assert_eq!(pair.as_rule(), Rule::ident);
   let mut result = Ident::default();
   result.dollar_span.start = pair.as_span().start();
-  if pair.as_str().starts_with('$') {
-    result.dollar = true;
-    result.dollar_span.len = 1;
-    result.name = pair.as_str()[1..].to_string()
-  } else {
-    result.name = pair.as_str().to_string()
-  }
+  result.name = match pair.as_str() {
+    s if s.starts_with("$") => {
+      result.dollar = true;
+      result.dollar_span.len = 1;
+      pair.as_str()[1..].to_string()
+    }
+    "@" => "@Global".to_string(),
+    s => s.to_string(),
+  };
   result.span = pair.as_span().into();
   Ok(result)
 }

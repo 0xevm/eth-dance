@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind, Forloop};
+use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind, Forloop, AssignOp};
 use crate::{
   ast::{Assignment, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Module, Func, globals, load_abi},
@@ -26,6 +26,8 @@ pub enum ErrorKind {
   ModuleNotContract(Type),
   #[error("func not found {0}.{1}")]
   FuncNotFound(String, String),
+  #[error("func {}.{} is_send should be {1}", .0.ns, .0.name)]
+  FuncSend(Func, bool),
   #[error("infer type failed {0}.{1}")]
   InferTypeFailed(String, String),
   #[error("loop: {0}")]
@@ -447,7 +449,10 @@ fn parse_forloop(state: &mut Typing, stmt: &Forloop) -> Result<()> {
 }
 
 pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
-  let rhs = parse_expr(state, &stmt.rhs)?;
+  let rhs = match stmt.op {
+    AssignOp::Send => parse_func_send(state, &stmt.rhs)?,
+    _ => parse_expr(state, &stmt.rhs)?,
+  };
   let id = match &stmt.lhs {
     Some(expr) => {
       let id = match &expr.inner {
@@ -519,6 +524,31 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
   Ok(ty)
 }
 
+pub fn parse_func_send(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
+  let mut result = Expression::default();
+  result.span = expr.span.clone();
+  match &expr.inner {
+    ExprKind::Funccall(i) => {
+      let code = parse_func(state, i)?;
+      if let ExprCode::Func { func, .. } = &code {
+        if func.is_send != true {
+          return Err(ErrorKind::FuncSend(func.clone(), true).when(&i.span))
+        }
+        result.returns = if func.name == "constructor" {
+          Type::Contract(func.ns.clone())
+        } else {
+          func.returns()
+        }
+      } else {
+        unreachable!()
+      }
+      result.code = code;
+    },
+    _ => todo!("unreachable"),
+  }
+  return Ok(result)
+}
+
 pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
   let span = expr.span.clone();
   let mut result = Expression::default();
@@ -539,6 +569,9 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     ExprKind::Funccall(i) => {
       let code = parse_func(state, i)?;
       if let ExprCode::Func { func, .. } = &code {
+        if func.is_send != false {
+          return Err(ErrorKind::FuncSend(func.clone(), false).when(&i.span))
+        }
         result.returns = if func.name == "constructor" {
           Type::Contract(func.ns.clone())
         } else {
@@ -651,5 +684,6 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));
   }
-  Ok(ExprCode::Func { func, this, args: arg_ids, send: i.dot.is_send() })
+  let send = func.is_send;
+  Ok(ExprCode::Func { func, this, args: arg_ids, send })
 }

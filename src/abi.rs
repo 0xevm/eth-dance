@@ -5,6 +5,7 @@ pub use ethabi::Contract as ContractAbi;
 pub use ethabi::Function as FunctionAbi;
 pub use ethabi::Constructor as ConstructorAbi;
 use ethabi::ParamType;
+use ethabi::StateMutability;
 
 use crate::typing::Type;
 
@@ -21,6 +22,7 @@ pub type Func = Rc<FuncImpl>;
 pub struct FuncImpl {
   pub ns: String,
   pub name: String,
+  pub is_send: bool,
   pub abi: Option<FunctionAbi>,
   pub signature: String,
   pub selector: [u8; 4],
@@ -36,6 +38,7 @@ impl Module {
         funcs.entry(n.to_string()).or_default().push(Rc::new(FuncImpl {
           ns: name.to_string(),
           name: f.name.clone(),
+          is_send: f.state_mutability != StateMutability::Pure && f.state_mutability != StateMutability::View,
           abi: Some(f.clone()),
           signature: f.signature(),
           selector: f.short_signature(),
@@ -52,6 +55,7 @@ impl Module {
     funcs.entry("constructor".to_string()).or_default().push(Rc::new(FuncImpl {
       ns: name.to_string(),
       name: "constructor".to_string(),
+      is_send: true,
       abi: None,
       signature: String::new(),
       selector: Default::default(),
@@ -118,6 +122,7 @@ pub fn global_module(module_name: &'static str, funcs: &[(&str, Vec<ParamType>, 
     module.funcs.entry(n.to_string()).or_default().push(Func::new(
       FuncImpl {
         ns: module_name.to_string(), name: n.to_string(),
+        is_send: false,
         abi: None, signature: Default::default(), selector: Default::default(),
         input_types: input.clone(), output_types: output.clone(),
       }));
