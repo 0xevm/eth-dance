@@ -30,13 +30,15 @@ pub enum ErrorKind {
   FuncNotFound(String, String),
   #[error("func {}.{} is_send should be {1}", .0.ns, .0.name)]
   FuncSend(Func, bool),
-  #[error("infer type failed {0}.{1}")]
-  InferTypeFailed(String, String),
-  #[error("loop: {0}")]
-  Loop(String),
+  #[error("no args provided to deploy {0}")]
+  DeployNoContract(String),
+  #[error("index key of {0:?} depth not match: got {1} should be {2}")]
+  IndexKeyDepth(String, usize, usize),
+  #[error("rhs.returns not a iterator {0}")]
+  LoopIterator(Type),
 }
 #[derive(Debug, thiserror::Error)]
-#[error("typing: {message} at {span:?}")]
+#[error("typing: {message} {kind} (at {span:?})")]
 pub struct Error {
   #[source]
   pub kind: ErrorKind,
@@ -132,6 +134,7 @@ pub enum ExprCode {
   List(Vec<ExprCode>),
   Loop(CodeId, CodeId),
   EndLoop(CodeId),
+  Access(CodeId, Vec<CodeId>),
 }
 
 #[derive(Debug, Default)]
@@ -272,7 +275,7 @@ impl Typing {
     let id = CodeId(self.last_id.0+1);
     self.infos.entry(id).or_default();
     self.get_info(id).span = span.clone();
-    self.get_info(id).keys = self.scopes.stack.clone();
+    self.get_info(id).keys = self.scopes.stack[1..].to_vec();
     self.last_id = id;
     id
   }
@@ -285,8 +288,8 @@ impl Typing {
     self.infos.get(&CodeId(id.0)).unwrap()
   }
 
-  pub fn find_name(&self, name: &str) -> Option<CodeId> {
-    self.scopes.latest.get(name).copied()
+  pub fn find_name(&self, name: &str) -> Result<CodeId, ErrorKind> {
+    self.scopes.latest.get(name).copied().ok_or_else(|| ErrorKind::IdentNameNotFound(name.to_string()))
   }
 
   pub fn insert_expr(&mut self, expr: Expression) -> CodeId {
@@ -400,7 +403,7 @@ fn parse_forloop(state: &mut Typing, stmt: &Forloop) -> Result<()> {
   let rhs = parse_expr(state, &stmt.rhs)?;
   let item_ty = match &rhs.returns {
     Type::FixedArray(ty, _) => ty.as_ref().clone(),
-    _ => return Err(ErrorKind::Loop(format!("rhs.returns not a iterator {}", rhs.returns)).when(&stmt.span)),
+    _ => return Err(ErrorKind::LoopIterator(rhs.returns).when(&stmt.span)),
   };
   let range_id = state.insert_expr(rhs);
   let name = match &stmt.lhs.inner {
@@ -442,15 +445,13 @@ pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
         let hint = parse_type(hint)?;
         match &hint {
           Type::ContractType(s) => {
-            let contract_id = state.find_name(&s);
-            let contract = contract_id.map(|id| state.get_info(id).ty().clone());
+            let contract_id = state.find_name(&s).when(&expr.span)?;
+            let contract = state.get_info(contract_id).ty().clone();
             trace!("hint: {} => {:?}", hint, contract);
             match contract {
-              Some(Type::ContractType(s)) =>
+              Type::ContractType(s) =>
                 state.get_info(id).should = Some(Type::Contract(s)),
-              _ => {
-                todo!("fixme: contract not found");
-              }
+              _ => unreachable!("fixme: contract type not match"),
             }
           }
           _ => state.get_info(id).should = Some(hint),
@@ -537,14 +538,11 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
     None => None,
   };
   match &expr.inner {
+    ExprKind::None => unreachable!(),
     ExprKind::Ident(i) => {
-      match state.find_name(&i.to_string()) {
-        Some(dst) => {
-          result.returns = state.get_info(dst).ty().clone();
-          result.code = ExprCode::Convert(dst, hint_ty);
-        },
-        None => return Err(ErrorKind::IdentNameNotFound(i.to_string()).when(&span))
-      }
+      let dst = state.find_name(&i.to_string()).when(&i.span)?;
+      result.returns = state.get_info(dst).ty().clone();
+      result.code = ExprCode::Convert(dst, hint_ty);
     },
     ExprKind::Funccall(i) => {
       let code = parse_func(state, i)?;
@@ -603,7 +601,20 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
         }
       }
     },
-    _ => unreachable!(),
+    ExprKind::Access(ident, idxes) => {
+      let dst = state.find_name(&ident.to_string()).when(&ident.span)?;
+      trace!("ident: keys {:?}", state.get_info(dst).keys);
+      if state.get_info(dst).keys.len() != idxes.len() {
+        return Err(ErrorKind::IndexKeyDepth(ident.to_string(), idxes.len(), state.get_info(dst).keys.len())).when(&expr.span);
+      }
+      let args = idxes.iter().map(|i| parse_expr(state, i)).collect::<Result<Vec<_>>>()?;
+      let mut arg_ids = Vec::new();
+      for arg in args {
+        arg_ids.push(state.insert_expr(arg));
+      }
+      result.returns = state.get_info(dst).ty().clone();
+      result.code = ExprCode::Access(dst, arg_ids);
+    }
   };
   result.span = span;
   Ok(result)
@@ -611,19 +622,20 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
 
 fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let mut this = None;
-  let module_ty = if i.module.to_string() != "" {
-    let name = i.module.to_string();
-    if let Some(id) = state.find_name(&name) {
-      this = Some(id);
-      trace!("func module: {} {:?}", name, state.get_info(id));
-      state.get_info(id).ty().clone()
-    } else if state.modules.contains(&name) {
-      Type::Global(name)
-    } else {
-      Type::NoneType
-    }
-  } else {
-    Type::Global("@Global".to_string())
+  let module_ty = match &i.module.inner {
+    ExprKind::Ident(ident) => {
+      let name = ident.to_string();
+      if let Ok(id) = state.find_name(&name) {
+        this = Some(id);
+        trace!("func module: {} {:?}", name, state.get_info(id));
+        state.get_info(id).ty().clone()
+      } else if state.modules.contains(&name) {
+        Type::Global(name)
+      } else {
+        Type::NoneType
+      }
+    },
+    _ => unreachable!(),
   };
   let module_str = match module_ty {
     Type::Global(name) => name.to_string(),
@@ -635,7 +647,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
   let (module_str, name) = if module_str == "@Global" && name == "deploy" {
     if args.is_empty() {
-      return Err(ErrorKind::InferTypeFailed(module_str, "deploy:this".to_string()).when(&i.span.clone()))
+      return Err(ErrorKind::DeployNoContract(module_str).when(&i.span.clone()))
     }
     let this_arg = args.remove(0);
     this = match this_arg.code {
@@ -659,7 +671,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
   }
   let func = match state.modules.get(&module_str).and_then(|i| i.select(&name, &arg_types)) {
     Some(func) => func,
-    None => return Err(ErrorKind::InferTypeFailed(module_str, name).when(&i.span))
+    None => return Err(ErrorKind::FuncNotFound(module_str, name).when(&i.span))
   };
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));

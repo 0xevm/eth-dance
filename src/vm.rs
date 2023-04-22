@@ -92,6 +92,7 @@ pub struct VM {
   pub generation: BTreeMap<CodeId, ValueId>,
   pub values: BTreeMap<ValueId, Value>,
   pub infos: BTreeMap<ValueId, ValueInfo>,
+  pub containers: BTreeMap<CodeId, Vec<(Vec<(ValueId, usize)>, ValueId)>>,
   pub builtin: BTreeMap<String, ValueId>,
   pub loop_idxes: Vec<(ValueId, usize)>,
   pub state: BuiltIn,
@@ -104,6 +105,7 @@ impl VM {
       generation: Default::default(),
       values: Default::default(),
       infos: Default::default(),
+      containers: Default::default(),
       builtin: Default::default(),
       loop_idxes: Default::default(),
       state: Default::default(),
@@ -160,16 +162,24 @@ impl VM {
   pub fn set_value(&mut self, code_id: CodeId, info: &Info, value: Value) -> Result<ValueId> {
     let value_id = self.generation.entry(code_id).or_insert(ValueId(code_id.0, 0)).next_gen();
     self.generation.insert(code_id, value_id);
-    trace!("set_value: {} {} = {}", code_id, value_id, value.show());
+    trace!("set_value: {} {}: {} = {}", code_id, value_id, value.ty, value.show());
     // let value = try_convert(info.ty(), value).map_err(|e| anyhow::format_err!("TryConvert: {}", e))?;
     if info.display.starts_with("$") && !info.display.starts_with("$$") {
       self.set_builtin(&info.display, value_id, &value);
     }
     self.values.insert(value_id, value);
+    if let Some((ValueId(c, 0), idx)) = self.loop_idxes.last().copied() {
+      if c == value_id.0 {
+        *self.loop_idxes.last_mut().unwrap() = (value_id, idx);
+      }
+    }
     let info = ValueInfo {
       name: info.display.clone(),
       keys: self.loop_idxes.clone(),
     };
+    if info.keys.len() > 0 {
+      self.containers.entry(code_id).or_default().push((info.keys.clone(), value_id));
+    }
     self.infos.insert(value_id, info);
     Ok(value_id)
   }
@@ -234,9 +244,8 @@ pub fn execute(vm: &mut VM, typing: &Typing, start: Option<CodeId>, end: Option<
         match range.v {
           ValueKind::Array(arr, ty) => {
             for (idx, item) in arr.into_iter().enumerate() {
-              let value_id = vm.set_value(*id, info, Value::new(item, ty.clone())?)?;
-              *vm.loop_idxes.last_mut().unwrap() = (value_id, idx+1);
-              vm.infos.get_mut(&value_id).unwrap().keys = vm.loop_idxes.clone();
+              *vm.loop_idxes.last_mut().unwrap() = (ValueId(id.0, 0), idx+1);
+              vm.set_value(*id, info, Value::new(item, ty.clone())?)?;
               execute(vm, typing, Some(*id), Some(*stop))?;
             }
           }
@@ -257,6 +266,10 @@ pub fn execute(vm: &mut VM, typing: &Typing, start: Option<CodeId>, end: Option<
 
 fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>) -> Result<Value> {
   let value = match &code {
+    ExprCode::None | ExprCode::Loop(_, _) | ExprCode::EndLoop(_) => {
+      warn!("skip {:?}: {:?}", ty, code);
+      Value::NONE
+    }
     ExprCode::Convert(i, ty) => {
       let value = if let Some(value) = vm.get_value(*i) {
         value.clone()
@@ -320,9 +333,30 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
       let sub_ty = sub_ty.unwrap_or_default();
       Value::new(ValueKind::Array(values, sub_ty.clone()), Type::FixedArray(Box::new(sub_ty), list.len()))?
     },
-    _ => {
-      warn!("skip {:?}: {:?}", ty, code);
-      Value::NONE
+    ExprCode::Access(container_id, arg_ids) => {
+      let Some(container) = vm.containers.get(container_id) else {
+        anyhow::bail!("id not container: {}", container_id);
+      };
+      let Some(args) = arg_ids.iter().map(|i| vm.get_value(*i)).collect::<Option<Vec<_>>>() else {
+        anyhow::bail!("some args not found: {:?}", arg_ids);
+      };
+      let arg_idx = args.iter().map(|i| i.as_number().and_then(|i| i.0.to_u64())).collect::<Vec<_>>();
+      let args = args.iter().map(|i| i.as_value_key()).collect::<Vec<_>>();
+      let mut result = None;
+      trace!("access {} {} with {:?} and {:?}", container_id, container.len(), arg_idx, args);
+      for k in container {
+        let Some(args2) = k.0.iter().map(|i| vm.values.get(&i.0)).collect::<Option<Vec<_>>>() else {
+          anyhow::bail!("some args (container) not found: {:?}", k.0);
+        };
+        let args2 = args2.iter().map(|i| i.as_value_key()).collect::<Vec<_>>();
+        trace!("access {} with {:?} and {:?}", container_id, &k.0, args2);
+        if args.iter().zip(&arg_idx).zip(args2.iter().zip(&k.0)).all(|((i1, i2), (j1, (_, j2)))| {
+          (i1.is_some() && i1 == j1) || i2 == &Some(*j2 as _)
+        }) {
+          result = Some(k.1);
+        }
+      }
+      vm.values.get(&result.unwrap()).unwrap().clone()
     }
   };
   Ok(match ty {

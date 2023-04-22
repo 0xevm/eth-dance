@@ -22,7 +22,7 @@ pub enum ErrorKind {
   Utf8Error(#[from] FromUtf8Error),
 }
 #[derive(Debug, thiserror::Error)]
-#[error("parsing: {message} {at:?} {rule:?}")]
+#[error("parsing: {message} {kind} ({at:?} {rule:?})")]
 pub struct Error {
   #[source]
   pub kind: ErrorKind,
@@ -285,7 +285,7 @@ pub struct TypedString {
 
 #[derive(Debug, Default)]
 pub struct Funccall {
-  pub module: Ident,
+  pub module: ExprLit,
   pub dot: Accessor,
   pub name: Ident,
   pub args: Vec<ExprLit>,
@@ -302,6 +302,7 @@ pub enum ExprKind {
   String(TypedString),
   Number(TypedNumber),
   List(ExprList),
+  Access(Ident, Vec<ExprLit>),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -453,18 +454,32 @@ fn parse_expr(pair: Pair<Rule>) -> Result<ExprLit> {
   })
 }
 
-// expr = { forloop | funccall | string | number | item }
+// expr = { funccall | string | number | fixed_array | index_access | ident }
 fn parse_expr_inner(pair: Pair<Rule>) -> Result<ExprKind> {
   let span = pair.as_span().into();
   let expr = match pair.as_rule() {
     Rule::funccall => parse_funccall(pair).map(|i| ExprKind::Funccall(Box::new(i)))?,
-    Rule::fixed_array => parse_array(pair).map(ExprKind::List).when(&span, Rule::expr)?,
     Rule::string => parse_string_typed(pair).map(ExprKind::String)?,
     Rule::number => parse_number(pair).map(ExprKind::Number)?,
+    Rule::fixed_array => parse_array(pair).map(ExprKind::List).when(&span, Rule::expr)?,
+    Rule::index_access => parse_access(pair).map(|(a, b)| ExprKind::Access(a, b))?,
     Rule::ident => parse_ident(pair).map(ExprKind::Ident)?,
     rule => return Err(ErrorKind::Mismatch { require: Rule::expr, found: rule }).when(&span, Rule::expr),
   };
   Ok(expr)
+}
+
+// index_access = { ident ~ "[" ~ (expr ~ ("," ~ expr)*) ~ "]" }
+fn parse_access(pair: Pair<Rule>) -> Result<(Ident, Vec<ExprLit>)> {
+  assert_eq!(pair.as_rule(), Rule::index_access);
+  let span = pair.as_span().into();
+  let mut pairs = pair.into_inner();
+  let ident = parse_ident(pairs.next().require(Rule::ident).when(&span, Rule::index_access)?)?;
+  let mut exprs = Vec::new();
+  for pair in pairs {
+    exprs.push(parse_expr(pair)?)
+  }
+  Ok((ident, exprs))
 }
 
 // fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
@@ -491,7 +506,11 @@ fn parse_funccall(pair: Pair<Rule>) -> Result<Funccall> {
   let mut funccall = Funccall::default();
   funccall.span = span.clone();
   if pairs.peek().expect("pairs: funccall => item").as_rule() != Rule::dot {
-    funccall.module = parse_ident(pairs.next().expect("pairs: funccall => item"))?;
+    let pair = pairs.next().expect("pairs: funccall => item");
+    funccall.module = ExprLit {
+      hint: None, span: pair.as_span().into(),
+      inner: parse_expr_inner(pair)?,
+    };
   }
   let pair = pairs.next().expect("pairs: funccall => dot");
   match (pair.as_rule(), pair.as_str()) {
@@ -551,6 +570,7 @@ fn parse_item(pair: Pair<Rule>) -> Result<ExprLit> {
   if let Some(pair) = pairs.next() {
     result.hint = Some(parse_type(pair)?);
   }
+  check_empty(pairs).when(&span, Rule::item)?;
   result.span = span;
   Ok(result)
 }

@@ -3,7 +3,7 @@ use std::{string::FromUtf8Error, num::ParseFloatError, str::ParseBoolError};
 use ethabi::Address;
 use ethers::types::{I256, U256, H256};
 
-use crate::{vm::Value, ast, typing};
+use crate::{vm::Value, ast};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {

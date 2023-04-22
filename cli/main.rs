@@ -28,7 +28,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
     Err(e) => {
       let line_index = Rc::new(input.lines().map(|i| i.as_ptr() as usize - input.as_ptr() as usize).collect::<Vec<_>>());
       for i in e.inner_errors() {
-        error!("parse error: {}\n{:?}", i.show_pos(&input, line_index.clone()), i);
+        error!("parse error: {}\n{}", i.show_pos(&input, line_index.clone()), i);
       }
       anyhow::bail!("parse failed")
     }
@@ -45,7 +45,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
     Err(e) => {
       let line_index = Rc::new(input.lines().map(|i| i.as_ptr() as usize - input.as_ptr() as usize).collect::<Vec<_>>());
       for i in e {
-        error!("typing error: {}\n{:?}", i.show_pos(&input, line_index.clone()), i);
+        error!("typing error: {}\n{}", i.show_pos(&input, line_index.clone()), i);
       }
       anyhow::bail!("typing failed")
     }

@@ -3,7 +3,6 @@ use std::str::FromStr;
 
 use ethabi::ParamType;
 use ethers::signers::LocalWallet;
-use ethers::utils::rlp::NULL_RLP;
 use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
@@ -175,6 +174,10 @@ impl std::fmt::Display for ExprCode {
       },
       ExprCode::Loop(arg0, arg1) => write!(f, "loop: {} => {}", arg0, arg1),
       ExprCode::EndLoop(arg0) => write!(f, "end_loop: {}", arg0),
+      ExprCode::Access(arg0, args) => {
+        let args_str = args.iter().map(|i| format!("{}", i)).collect::<Vec<_>>().join(", ");
+        write!(f, "{}[{}]", arg0, args_str)
+      }
     }
   }
 }
