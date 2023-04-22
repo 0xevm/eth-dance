@@ -20,8 +20,10 @@ pub enum ErrorKind {
   Abi(#[source] anyhow::Error),
   #[error(transparent)]
   AbiType(#[from] ethabi::Error),
-  #[error("name not found {0:?}")]
-  NameNotFound(String),
+  #[error("ident name not found {0:?}")]
+  IdentNameNotFound(String),
+  #[error("type name not found {0:?}")]
+  TypeNameNotFound(String),
   #[error("module not contract {0:?}")]
   ModuleNotContract(Type),
   #[error("func not found {0}.{1}")]
@@ -102,6 +104,7 @@ pub enum Type {
   Wallet,
   Address,
   String,
+  Receipt,
   // Custom(StringPrefix), // the prefix
   Number(NumberSuffix),
   FixedArray(Box<Type>, usize),
@@ -116,30 +119,6 @@ impl From<StringPrefix> for Type {
       StringPrefix::Address => Type::Address,
       StringPrefix::Contract => Type::Bytes,
     }
-  }
-}
-impl Type {
-  pub fn abi(&self) -> Option<ethabi::ParamType> {
-    Some(match self {
-      Type::NoneType => ethabi::ParamType::FixedBytes(0),
-      Type::Global(_) => return None,
-      Type::ContractType(_) => ethabi::ParamType::Bytes,
-      Type::Contract(_) => ethabi::ParamType::Address,
-      // Type::Function(_, _) => return None,
-      Type::Abi(i) => i.clone(),
-      Type::Bool => ethabi::ParamType::Bool,
-      Type::String => ethabi::ParamType::String,
-      Type::Address | Type::Wallet => ethabi::ParamType::Address,
-      Type::Bytes => ethabi::ParamType::Bytes,
-      Type::Number(i) => match i {
-        NumberSuffix::F(size) => ethabi::ParamType::FixedBytes(*size / 8),
-        _ if i.is_unsigned() => ethabi::ParamType::Uint(256),
-        _ => ethabi::ParamType::Int(256),
-      },
-      Type::FixedArray(i, n) => {
-        ethabi::ParamType::FixedArray(Box::new(i.abi()?), *n)
-      }
-    })
   }
 }
 
@@ -496,15 +475,16 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
         "string" => Type::String,
         "address" => Type::Address,
         "wallet" => Type::Wallet,
+        "receipt" => Type::Receipt,
         "bytes" => Type::Bytes,
         // "bytecode" => Type::Custom(StringPrefix::Bytecode),
         _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
         _ if s.starts_with("int_") => {
           let suffix = &s["int_".len()..];
-          let suffix = suffix.parse().map_err(|_| ErrorKind::NameNotFound(suffix.to_string())).when(&hint.span)?;
+          let suffix = suffix.parse().map_err(|_| ErrorKind::TypeNameNotFound(suffix.to_string())).when(&hint.span)?;
           Type::Number(suffix)
         },
-        _ => return Err(ErrorKind::NameNotFound(s.to_string()).when(&hint.span)),
+        _ => return Err(ErrorKind::TypeNameNotFound(s.to_string()).when(&hint.span)),
       }
     },
     TypeKind::String(s, prefix) => {
@@ -563,7 +543,7 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
           result.returns = state.get_info(dst).ty().clone();
           result.code = ExprCode::Convert(dst, hint_ty);
         },
-        None => return Err(ErrorKind::NameNotFound(i.to_string()).when(&span))
+        None => return Err(ErrorKind::IdentNameNotFound(i.to_string()).when(&span))
       }
     },
     ExprKind::Funccall(i) => {

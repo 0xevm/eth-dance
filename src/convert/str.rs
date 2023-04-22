@@ -3,15 +3,17 @@ use std::str::FromStr;
 
 use ethabi::ParamType;
 use ethers::signers::LocalWallet;
+use ethers::utils::rlp::NULL_RLP;
 use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
-use crate::convert::conv::try_convert_hex_to_bytes;
+use crate::convert::conv::{try_convert_hex_to_bytes, ErrorExt};
 use crate::typing::{CodeId, self};
 use crate::vm::{ValueKind, Value, ValueId, ValueKey};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
-use super::conv::try_convert_hex_to_addr;
+use super::Error;
+use super::conv::{try_convert_hex_to_addr, ErrorKind};
 
 impl Display for Ident {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -70,32 +72,8 @@ impl FromStr for NumberSuffix {
   }
 }
 
-pub fn escape_str(s: &str) -> String {
-  let s = s.replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-    .replace("\n", "\\n")
-    .replace("\t", "\\t")
-    .replace(":", "\\x3A")
-    .replace(",", "\\x2C");
-  format!("\"{}\"", s)
-}
-
-pub fn unescape_str(s: &str) -> Result<String, &'static str> {
-  let s = if s.starts_with("\"") && s.ends_with("\"") {
-    s.strip_prefix("\"").unwrap_or(s).strip_suffix("\"").unwrap_or(s)
-  } else { s };
-  let s = s
-    .replace("\\\\", "\0")
-    .replace("\\\"", "\"")
-    .replace("\\n", "\n")
-    .replace("\\t", "\t")
-    .replace("\\x3A", ":")
-    .replace("\\x2C", ",")
-    .replace("\0", "\\");
-  Ok(s)
-}
-
 impl Display for Type {
+  /// related [`crate::typing::parse_type`]
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Type::NoneType => write!(f, "none"),
@@ -105,6 +83,7 @@ impl Display for Type {
       Type::Bytes => write!(f, "bytes"),
       // Type::Custom(StringPrefix::Bytecode) | Type::Custom(StringPrefix::Contract) => write!(f, "bytecode"),
       Type::Wallet => write!(f, "wallet"),
+      Type::Receipt => write!(f, "receipt"),
       Type::Global(s) => write!(f, "@{}", s),
       Type::Contract(s) => write!(f, "{:?}", s),
       // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
@@ -117,21 +96,19 @@ impl Display for Type {
 }
 
 impl FromStr for Type {
-  type Err = &'static str;
+  type Err = Error;
 
   fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
     use pest::Parser;
-    let mut pairs = ast::AstParser::parse(ast::Rule::r#type, s).map_err(|_| "parsing")?;
+    let mut pairs = ast::AstParser::parse(ast::Rule::r#type, s).context("Type::from_str: parsing")?;
     let result = if let Some(pair) = pairs.next() {
       assert_eq!(pair.as_rule(), ast::Rule::r#type);
-      let lit = ast::parse_type(pair).map_err(|_| "ast")?;
-      typing::parse_type(&lit).map_err(|_| "typing")?
+      let lit = ast::parse_type(pair).context("Type::from_str: ast")?;
+      typing::parse_type(&lit).map_err(ErrorKind::custom_error).context("Type::from_str: typing")?
     } else {
-      return Err("parsed nothing")
+      unreachable!();
     };
-    if pairs.next().is_some() {
-      return Err("more than one token")
-    }
+    ast::check_empty(pairs).map_err(|e| e.context("", ast::Rule::r#type)).context("Type::from_str: ast")?;
     Ok(result)
   }
 }
@@ -223,7 +200,7 @@ impl Display for Value {
 }
 
 impl FromStr for Value {
-  type Err = &'static str;
+  type Err = Error;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     if s == "()" {
@@ -234,8 +211,8 @@ impl FromStr for Value {
     }
     let sr = s.rsplitn(2, ":").collect::<Vec<_>>();
     let ty: Type = sr[0].trim().parse()?;
-    let v = ValueKind::parse_str(sr[1], &ty)?;
-    Self::new(v, ty).map_err(|_| "type error")
+    let v = ValueKind::parse_str(sr[1], &ty).context("Value::from_str")?;
+    Self::new(v, ty).map_err(|e| ErrorKind::anyhow(e)).context("Value::from_str")
   }
 }
 
@@ -246,6 +223,7 @@ impl std::fmt::Debug for ValueKind {
       Self::Number(arg0) => f.debug_tuple("Number").field(arg0).finish(),
       Self::Address(arg0) => f.debug_tuple("Address").field(arg0).finish(),
       Self::Wallet(arg0) => f.debug_tuple("Wallet").field(arg0).finish(),
+      Self::Receipt(arg0) => f.debug_tuple("Receipt").field(&arg0.transaction_hash).finish(),
       Self::String(arg0) => f.debug_tuple("String").field(arg0).finish(),
       Self::Bytes(arg0) => f.debug_tuple("Bytes").field(arg0).finish(),
       Self::Bytecode(arg0) => {
@@ -265,6 +243,7 @@ impl ValueKind {
       ValueKind::Number(i) => format!("{}", i),
       ValueKind::Address(i) => format!("{}", to_checksum(i, None)),
       ValueKind::Wallet(i) => format!("0x{}", hex::encode(i.clone().signer().to_bytes())),
+      ValueKind::Receipt(i) => format!("{}", serde_json::to_string(i).unwrap()),
       ValueKind::String(i) => format!("{:?}", i),
       ValueKind::Bytes(i) => format!("0x{}", hex::encode(i)),
       ValueKind::Bytecode(i) => format!("0x{}", hex::encode(i)), // TODO: hash
@@ -273,24 +252,20 @@ impl ValueKind {
     }
   }
 
-  pub fn parse_str(s: &str, ty: &Type) -> Result<Self, &'static str> {
+  pub fn parse_str(s: &str, ty: &Type) -> Result<Self, ErrorKind> {
     trace!("value parse_str {} {}", s, ty);
     let result = match ty {
       Type::NoneType => Self::Bytes(vec![]),
       Type::Global(_) => todo!(),
       Type::ContractType(_) => todo!(),
       Type::Address | Type::Contract(_) | Type::Abi(ParamType::Address) => {
-        Self::Address(try_convert_hex_to_addr(s).map_err(|_| "parse addr")?)
+        Self::Address(try_convert_hex_to_addr(s)?)
       }
       Type::Abi(_) => todo!(),
-      Type::Bool => match s {
-        "true" => Self::Bool(true),
-        "false" => Self::Bool(false),
-        _ => return Err("unknown bool"),
-      },
-      Type::String => Self::String(unescape_str(s)?),
+      Type::Bool => Self::Bool(s.parse()?),
+      Type::String => Self::String(ron::from_str(s)?),
       Type::Bytes | Type::Wallet => {
-        let bytes = try_convert_hex_to_bytes(s).map_err(|_| "parse bytes")?;
+        let bytes = try_convert_hex_to_bytes(s)?;
         match ty {
           // StringPrefix::None => unreachable!(),
           Type::Bytes => Self::Bytes(bytes),
@@ -300,6 +275,7 @@ impl ValueKind {
           _ => unreachable!()
         }
       }
+      Type::Receipt => Self::Receipt(serde_json::from_str(s).unwrap()),
       Type::Number(_) =>
         Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap()),
       Type::FixedArray(inner, _) => {

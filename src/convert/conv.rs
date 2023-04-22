@@ -1,9 +1,9 @@
-use std::{string::FromUtf8Error, num::ParseFloatError};
+use std::{string::FromUtf8Error, num::ParseFloatError, str::ParseBoolError};
 
 use ethabi::Address;
 use ethers::types::{I256, U256, H256};
 
-use crate::vm::Value;
+use crate::{vm::Value, ast, typing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
@@ -19,10 +19,21 @@ pub enum ErrorKind {
   Custom(String),
 
   #[error(transparent)]
+  AST(#[from] ast::Error),
+  // #[error(transparent)]
+  // Typing(#[from] typing::Error),
+
+  #[error(transparent)]
   FromUtf8(#[from] FromUtf8Error),
   #[error(transparent)]
   ParseFloat(#[from] ParseFloatError),
+  #[error(transparent)]
+  ParseBool(#[from] ParseBoolError),
 
+  #[error(transparent)]
+  RonSpanned(#[from] ron::error::SpannedError),
+  #[error(transparent)]
+  Pest(#[from] pest::error::Error<ast::Rule>),
   #[error(transparent)]
   Wallet(#[from] ethers::signers::WalletError),
   #[error(transparent)]
@@ -44,6 +55,9 @@ pub struct Error {
 impl ErrorKind {
   pub fn custom<S: ToString>(s: S) -> Self {
     ErrorKind::Custom(s.to_string())
+  }
+  pub fn anyhow<E: Into<anyhow::Error>>(e: E) -> Self {
+    ErrorKind::Custom(format!("{}", e.into()))
   }
   pub fn custom_error<E: std::error::Error>(s: E) -> Self {
     ErrorKind::Custom(format!("{:?}", s))

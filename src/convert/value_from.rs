@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use bigdecimal::{BigDecimal, FromPrimitive};
 use ethabi::Address;
-use ethers::signers::LocalWallet;
+use ethers::{signers::LocalWallet, types::TransactionReceipt};
 
 use crate::{
   vm::{ValueKind, Value},
@@ -39,6 +39,9 @@ impl Value {
   }
   pub fn from_wallet(wallet: LocalWallet) -> Self {
     Self { v: ValueKind::Wallet(wallet), ty: Type::Wallet }
+  }
+  pub fn from_receipt(receipt: TransactionReceipt) -> Self {
+    Self { v: ValueKind::Receipt(receipt), ty: Type::Receipt }
   }
   pub fn from_array(array: Vec<ValueKind>, item_ty: Type) -> Self {
     let len = array.len();

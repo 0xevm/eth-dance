@@ -25,6 +25,7 @@ impl Value {
   pub fn as_address(&self) -> Option<Address> {
     match &self.v {
       ValueKind::Address(v) => Some(*v),
+      ValueKind::Receipt(v) => v.contract_address,
       _ => None,
     }
   }

@@ -9,7 +9,7 @@ pub use conv::Error;
 use ethabi::{ParamType, Token};
 use ethers::{
   signers::Signer,
-  types::I256,
+  types::{I256, TransactionReceipt},
 };
 
 use crate::{typing::Type, vm::{ValueKind, Value}};
@@ -51,6 +51,9 @@ impl Value {
 
       (Type::String, ValueKind::String(s), ParamType::String) => {
         Token::String(s.to_string())
+      }
+      (_, ValueKind::Receipt(TransactionReceipt { contract_address: Some(addr), ..}), ParamType::Address) => {
+        Token::Address(*addr)
       }
       _ => todo!("convert {:?} to {}", self, abi)
     };

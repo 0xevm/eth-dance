@@ -34,19 +34,19 @@ pub struct Error {
 pub type Result<T, E=Error> = std::result::Result<T, E>;
 
 impl ErrorKind {
-  fn when(self, at: &Span, rule: Rule) -> Error {
+  pub fn when(self, at: &Span, rule: Rule) -> Error {
     Error {
       kind: self, message: String::new(), at: Some(at.clone()), rule,
       // backtrace: Backtrace::force_capture(),
     }
   }
-  fn when_rule(self, when: Rule, rule: Rule) -> Error {
+  pub fn when_rule(self, when: Rule, rule: Rule) -> Error {
     Error {
       kind: self, message: format!("at rule {:?}", when), at: None, rule,
       // backtrace: Backtrace::force_capture(),
     }
   }
-  fn context<S: ToString>(self, s: S, rule: Rule) -> Error {
+  pub fn context<S: ToString>(self, s: S, rule: Rule) -> Error {
     Error {
       kind: self, message: s.to_string(), at: None, rule,
       // backtrace: Backtrace::force_capture(),

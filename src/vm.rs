@@ -28,6 +28,7 @@ pub enum ValueKind {
   Number(bigdecimal::BigDecimal),
   Address(Address),
   Wallet(LocalWallet), // Custom(key)
+  Receipt(TransactionReceipt),
   String(String), // String
   Bytes(Vec<u8>), // Custom(hex)
   Bytecode(Vec<u8>), // Custom(contract)
@@ -48,6 +49,7 @@ pub enum ValueKey {
   String(String),
 }
 
+/// see also [`crate::convert::value_into`] and [`crate::convert::value_from`]
 impl Value {
   pub const NONE: Value = Self { v: ValueKind::Tuple(Vec::new()), ty: Type::NoneType };
   pub fn new(v: ValueKind, ty: Type) -> Result<Self> {
@@ -277,7 +279,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
           anyhow::bail!("vm: contract bytecode not present")
         };
         let result = deploy_contract(vm, func.clone(), bytecode, &args)?;
-        Value::from_address(result.unwrap(), None)
+        Value::from_receipt(result)
       } else if !func.ns.starts_with("@/") {
         call_global(vm, func.clone(), &args)?
       } else if let Some(this) = this {
@@ -286,8 +288,8 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
         };
         trace!("this_addr: {:?} {:?}", this, this_addr);
         if *send {
-          send_tx(vm, this_addr, func.clone(), &args)?;
-          Value::NONE
+          let receipt = send_tx(vm, this_addr, func.clone(), &args)?;
+          Value::from_receipt(receipt)
         } else {
           call_tx(vm, this_addr, func.clone(), &args, ty)?
         }
@@ -345,19 +347,20 @@ fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
 }
 
 #[tokio::main]
-async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Option<TransactionReceipt>> {
+async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<TransactionReceipt> {
   if let Some(wallet) = &vm.state.wallet {
     tx = tx.from(wallet.address());
     // wallet.sign_transaction_sync(&tx)?;
   }
   let pending = vm.provider.send_transaction(tx, None).await?;
+  let tx_hash = pending.tx_hash();
   trace!("pending: {:?}", pending);
   let pending = if let Some(i) = vm.state.confirm_interval {
     pending.interval(std::time::Duration::from_secs_f64(i))
   } else {
     pending
   };
-  Ok(pending.await?)
+  Ok(pending.await?.ok_or_else(|| anyhow::anyhow!("transaction not found: {}", tx_hash))?)
 }
 
 #[tokio::main]
@@ -382,15 +385,14 @@ fn convert_from_token(ty: Option<&Type>, mut args: Vec<Token>) -> Result<Value> 
   Ok(Value::from_token_ty(arg, ty)?)
 }
 
-fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<()> {
+fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<TransactionReceipt> {
   let tokens = convert_to_token(&func.input_types, args)?;
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);
   input_data.extend_from_slice(&ethabi::encode(&tokens));
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
-  do_send_tx_sync(vm, tx)?;
-  Ok(())
+  Ok(do_send_tx_sync(vm, tx)?)
 }
 
 fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value], ty: Option<&Type>) -> Result<Value> {
@@ -407,7 +409,7 @@ fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value], ty: Option<
   Ok(result)
 }
 
-fn deploy_contract(vm: &VM, func: Func, bytecode: &[u8], args: &[&Value]) -> Result<Option<Address>> {
+fn deploy_contract(vm: &VM, func: Func, bytecode: &[u8], args: &[&Value]) -> Result<TransactionReceipt> {
   let tokens = convert_to_token(&func.input_types, args)?;
   info!("deploy_contract: {} {} to {}", func.ns, bytecode.len(), vm.provider.url());
   let mut input_data = Vec::new();
@@ -415,6 +417,5 @@ fn deploy_contract(vm: &VM, func: Func, bytecode: &[u8], args: &[&Value]) -> Res
   input_data.extend_from_slice(&ethabi::encode(&tokens));
   let tx = TransactionRequest::new().data(input_data);//.from(vm.builtin.account);
   let receipt = do_send_tx_sync(vm, tx)?;
-  let address = receipt.and_then(|i| i.contract_address);
-  Ok(address)
+  Ok(receipt)
 }
