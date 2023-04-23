@@ -293,7 +293,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
         };
         let result = deploy_contract(vm, func.clone(), bytecode, &args)?;
         Value::from_receipt(result)
-      } else if !func.ns.starts_with("@/") {
+      } else if !func.ns.0.starts_with("@/") {
         call_global(vm, func.clone(), &args)?
       } else if let Some(this) = this {
         let Some(this_addr) = vm.get_value(*this).and_then(Value::as_address) else {
@@ -368,7 +368,7 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
 }
 
 fn call_global(_vm: &VM, func: Func, args: &[&Value]) -> Result<Value> {
-  let out = match (func.ns.as_str(), func.name.as_str()) {
+  let out = match (func.ns.0.as_str(), func.name.as_str()) {
     ("@assert", "eq") => {
       if args[0] != args[1] {
         anyhow::bail!("vm: assert_eq failed: {:?} != {:?}", args[0], args[1])

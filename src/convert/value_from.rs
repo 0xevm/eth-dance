@@ -6,13 +6,13 @@ use ethers::{signers::LocalWallet, types::TransactionReceipt};
 
 use crate::{
   vm::{ValueKind, Value},
-  ast::{TypedNumber, TypedString, StringPrefix, NumberSuffix}, typing::Type,
+  ast::{TypedNumber, TypedString, StringPrefix, NumberSuffix}, typing::{Type, ModuleName},
 };
 
 use super::{conv::{try_convert_hex_to_bytes, ErrorExt, ErrorKind}, Error, value_into::Number};
 
 impl Value {
-  pub fn from_address(address: Address, name: Option<String>) -> Self {
+  pub fn from_address(address: Address, name: Option<ModuleName>) -> Self {
     match name {
       Some(name) => Self { v: ValueKind::Address(address), ty: Type::Contract(name) },
       None => Self { v: ValueKind::Address(address), ty: Type::Address },
@@ -28,7 +28,7 @@ impl Value {
   pub fn from_bytes(bytes: Vec<u8>) -> Self {
     Self { v: ValueKind::Bytes(bytes), ty: Type::Bytes }
   }
-  pub fn from_bytecode(bytes: Vec<u8>, name: Option<String>) -> Self {
+  pub fn from_bytecode(bytes: Vec<u8>, name: Option<ModuleName>) -> Self {
     match name {
       Some(name) => Self { v: ValueKind::Bytecode(bytes), ty: Type::ContractType(name) },
       None => Self { v: ValueKind::Bytecode(bytes), ty: Type::Bytes },

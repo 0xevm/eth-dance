@@ -258,7 +258,7 @@ pub enum TypePrefix {
   #[default]
   #[strum(serialize = "", serialize = "string")]
   None,
-  Abi, Contract,
+  Abi, Contract, Receipt,
 }
 
 impl StringPrefix {

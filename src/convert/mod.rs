@@ -95,7 +95,7 @@ impl Value {
     }
     let result = match (token, ty.unwrap()) {
       (token, Type::Abi(_)) => Self::from_token(token)?,
-      (Token::Address(addr), Type::Contract(name)) => Value::from_address(addr, Some(name.to_string())),
+      (Token::Address(addr), Type::Contract(name)) => Value::from_address(addr, Some(name.clone())),
 
       (token, _) => {
         todo!("from_token: {:?} {:?}", token, ty)

@@ -1,4 +1,4 @@
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display, Formatter, Debug};
 use std::str::FromStr;
 
 use ethabi::ParamType;
@@ -7,7 +7,7 @@ use ethers::utils::to_checksum;
 
 use crate::ast::StringPrefix;
 use crate::convert::conv::{try_convert_hex_to_bytes, ErrorExt};
-use crate::typing::{CodeId, self};
+use crate::typing::{CodeId, self, ModuleName};
 use crate::vm::{ValueKind, Value, ValueId, ValueKey};
 use crate::{ast::{Ident, TypedString, TypedNumber, NumberSuffix, self}, typing::{Type, ExprCode}};
 
@@ -71,6 +71,29 @@ impl FromStr for NumberSuffix {
   }
 }
 
+impl Display for ModuleName {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "{}", self.0)
+  }
+}
+impl Debug for ModuleName {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "{}", ron::to_string(&self.0).map_err(|_| fmt::Error)?)
+  }
+}
+impl FromStr for ModuleName {
+  type Err = &'static str;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    Ok(ModuleName::new(&ron::from_str::<String>(s).map_err(|_| "ron parse string")?))
+  }
+}
+impl ModuleName {
+  pub fn new(value: &str) -> Self {
+    ModuleName(std::sync::Arc::new(value.to_string()))
+  }
+}
+
 impl Display for Type {
   /// related [`crate::typing::parse_type`]
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -85,8 +108,9 @@ impl Display for Type {
       Type::Receipt => write!(f, "receipt"),
       Type::Global(s) => write!(f, "@{}", s),
       Type::Contract(s) => write!(f, "{:?}", s),
+      Type::ContractReceipt(s) => write!(f, "receipt{:?}", s),
       // Type::Function(a, b) => write!(f, "Function({}:{})", a, b),
-      Type::Abi(abi) => write!(f, "abi{:?}", abi.to_string()),
+      Type::Abi(abi) => write!(f, "abi{}", ron::to_string(&abi.to_string()).unwrap()),
       Type::ContractType(s) => write!(f, "contract{:?}", s),
       Type::Number(s) => write!(f, "int_{}", s),
       Type::FixedArray(t, n) => write!(f, "[{}; {}]", t, n),
@@ -278,7 +302,7 @@ impl ValueKind {
           _ => unreachable!()
         }
       }
-      Type::Receipt => Self::Receipt(serde_json::from_str(s).unwrap()),
+      Type::Receipt | Type::ContractReceipt(_) => Self::Receipt(serde_json::from_str(s).unwrap()),
       Type::Number(_) =>
         Self::Number(bigdecimal::BigDecimal::from_str(s).unwrap()),
       Type::FixedArray(inner, _) => {

@@ -1,4 +1,5 @@
 use ethabi::ParamType;
+use ethers::types::TransactionReceipt;
 
 use crate::{vm::{Value, ValueKind}, typing::Type};
 
@@ -15,8 +16,11 @@ impl Value {
       (Type::Address, ValueKind::Address(_), Type::Contract(_)) |
       (Type::Contract(_), ValueKind::Address(_), Type::Abi(ParamType::Address))
         => Value { ty: ty.clone(), ..self },
+
+      (Type::Receipt, ValueKind::Receipt(TransactionReceipt { contract_address: Some(_), ..}), Type::Contract(s))
+        => Value { ty: Type::ContractReceipt(s.clone()), ..self },
       _ => {
-        warn!("unknown convert {} {}", self.ty, ty);
+        warn!("unknown convert (as_ty) {} {}", self.ty, ty);
         return Err(self)
       }
     };

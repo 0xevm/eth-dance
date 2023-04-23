@@ -7,20 +7,21 @@ pub use ethabi::Constructor as ConstructorAbi;
 use ethabi::ParamType;
 use ethabi::StateMutability;
 
+use crate::typing::ModuleName;
 use crate::typing::Type;
 
 #[derive(Debug)]
 pub struct Module {
-  pub name: String,
+  pub name: ModuleName,
   pub abi: Option<ContractAbi>,
   pub bytecode: Option<String>,
   pub funcs: BTreeMap<String, Vec<Func>>,
 }
 
 pub type Func = Rc<FuncImpl>;
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FuncImpl {
-  pub ns: String,
+  pub ns: ModuleName,
   pub name: String,
   pub is_send: bool,
   pub abi: Option<FunctionAbi>,
@@ -32,11 +33,12 @@ pub struct FuncImpl {
 
 impl Module {
   pub fn new(name: &str, abi: ContractAbi, bytecode: Option<String>) -> Self {
+    let ns = ModuleName::new(name);
     let mut funcs: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for (n, v) in &abi.functions {
       for f in v {
         funcs.entry(n.to_string()).or_default().push(Rc::new(FuncImpl {
-          ns: name.to_string(),
+          ns: ns.clone(),
           name: f.name.clone(),
           is_send: f.state_mutability != StateMutability::Pure && f.state_mutability != StateMutability::View,
           abi: Some(f.clone()),
@@ -53,7 +55,7 @@ impl Module {
       vec![]
     };
     funcs.entry("constructor".to_string()).or_default().push(Rc::new(FuncImpl {
-      ns: name.to_string(),
+      ns: ns.clone(),
       name: "constructor".to_string(),
       is_send: true,
       abi: None,
@@ -62,7 +64,7 @@ impl Module {
       input_types: ctor_inputs.iter().map(|i| i.kind.clone()).collect(),
       output_types: vec![ParamType::Address],
     }));
-    Self { name: name.to_string(), abi: Some(abi), bytecode, funcs }
+    Self { name: ns.clone(), abi: Some(abi), bytecode, funcs }
   }
 
   pub fn select(&self, name: &str, args: &[Type]) -> Option<Func> {
@@ -116,12 +118,13 @@ pub fn load_abi(name: &str, input: &str) -> Result<Module> {
   Ok(Module::new(name, abi, bytecode))
 }
 
-pub fn global_module(module_name: &'static str, funcs: &[(&str, Vec<ParamType>, Vec<ParamType>)]) -> Module {
-  let mut module = Module { name: module_name.to_string(), abi: None, bytecode: None, funcs: BTreeMap::new() };
+pub fn global_module(name: &'static str, funcs: &[(&str, Vec<ParamType>, Vec<ParamType>)]) -> Module {
+  let module_name = ModuleName::new(name);
+  let mut module = Module { name: module_name.clone(), abi: None, bytecode: None, funcs: BTreeMap::new() };
   for (n, input, output) in funcs {
     module.funcs.entry(n.to_string()).or_default().push(Func::new(
       FuncImpl {
-        ns: module_name.to_string(), name: n.to_string(),
+        ns: module_name.clone(), name: n.to_string(),
         is_send: false,
         abi: None, signature: Default::default(), selector: Default::default(),
         input_types: input.clone(), output_types: output.clone(),

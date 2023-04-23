@@ -6,7 +6,7 @@ impl Type {
       Type::NoneType => ethabi::ParamType::FixedBytes(0),
       Type::Global(_) => return None,
       Type::ContractType(_) => ethabi::ParamType::Bytes,
-      Type::Contract(_) => ethabi::ParamType::Address,
+      Type::Contract(_) | Type::ContractReceipt(_) => ethabi::ParamType::Address,
       // Type::Function(_, _) => return None,
       Type::Abi(i) => i.clone(),
       Type::Bool => ethabi::ParamType::Bool,

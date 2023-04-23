@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind, Forloop, AssignOp};
 use crate::{
@@ -27,11 +28,11 @@ pub enum ErrorKind {
   #[error("module not contract {0:?}")]
   ModuleNotContract(Type),
   #[error("func not found {0}.{1}")]
-  FuncNotFound(String, String),
+  FuncNotFound(ModuleName, String),
   #[error("func {}.{} is_send should be {1}", .0.ns, .0.name)]
   FuncSend(Func, bool),
   #[error("no args provided to deploy {0}")]
-  DeployNoContract(String),
+  DeployNoContract(ModuleName),
   #[error("index key of {0:?} depth not match: got {1} should be {2}")]
   IndexKeyDepth(String, usize, usize),
   #[error("rhs.returns not a iterator {0}")]
@@ -92,13 +93,17 @@ impl<T, E: Into<ErrorKind>> ErrorExt<T, E> for Result<T, E> {
   }
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ModuleName(pub Arc<String>);
+
 #[derive(Debug, Clone, Default, PartialEq, strum::AsRefStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Type {
   #[default] NoneType,
-  Global(String),
-  ContractType(String),
-  Contract(String),
+  Global(ModuleName),
+  ContractType(ModuleName),
+  Contract(ModuleName),
+  ContractReceipt(ModuleName),
   // Function(String, String),
   Abi(ethabi::ParamType),
   Bool,
@@ -212,27 +217,20 @@ impl Modules {
   }
 
   pub fn insert(&mut self, module: Module) {
-    let module_name = module.name.to_string();
-    self.modules.insert(module.name.to_string(), module);
-    self.contracts.insert(module_name.to_string(), module_name.to_string());
+    let module_name = module.name.clone();
+    self.modules.insert(module_name.clone(), module);
+    self.contracts.insert(module_name.to_string(), module_name.clone());
     // self.contracts.insert(name.to_string(), module_name.to_string());
     // self.contract_names.insert(module_name.to_string(), name);
   }
   pub fn get(&self, name: &str) -> Option<&Module> {
-    self.modules.get(name).or_else(||
-      self.contracts.get(name).and_then(|n| self.modules.get(n))
-    )
+    self.contracts.get(name).and_then(|n| self.modules.get(n))
   }
-  pub fn contains(&self, name: &str) -> bool {
-    self.modules.contains_key(name)
-  }
-  pub fn set_name(&mut self, display_name: &str, name: &str) {
-    self.contracts.insert(display_name.to_string(), name.to_string());
-    self.contract_names.insert(name.to_string(), display_name.to_string());
+  pub fn set_name(&mut self, display_name: &str, name: &ModuleName) {
+    self.contracts.insert(display_name.to_string(), name.clone());
+    self.contract_names.entry(name.clone()).or_insert(display_name.to_string());
   }
 }
-
-pub type ModuleName = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CodeId(pub u64);
@@ -262,7 +260,7 @@ impl Typing {
     self.infos.entry(id).or_default();
     // self.scopes.insert(contract.name.to_string(), id);
     // self.get_info(id).display = name.to_string();
-    self.get_info(id).should = Some(Type::ContractType(contract.name.to_string()));
+    self.get_info(id).should = Some(Type::ContractType(contract.name.clone()));
     if let Some(bytecode) = &contract.bytecode {
       self.get_info(id).expr.code = ExprCode::String(TypedString { prefix: StringPrefix::Bytecode, value: bytecode.to_string().into(), span: Span::default() });
       self.get_info(id).expr.returns = Type::Bytes
@@ -323,6 +321,9 @@ pub fn parse_file(state: &mut Typing, stmts: &[StmtKind]) -> Result<(), Vec<Erro
       _ => {},
     }
   }
+  if !errors.is_empty() {
+    return Err(errors)
+  }
 
   for (i, stmt) in stmts.iter().enumerate() {
     if visited.contains(&i) { continue }
@@ -353,8 +354,9 @@ pub fn parse_stmt_types(state: &mut Typing, stmt: &StmtKind) -> Result<bool> {
           warn!("fixme: check resolved path in moduels {}", resolved_path);
           let content = std::fs::read_to_string(real_path).context(&resolved_path, &span)?;
           let module = load_abi(&resolved_path, &content).map_err(ErrorKind::Abi).context(&resolved_path, &span)?;
+          let module_name = module.name.clone();
           let id = state.add_module(module, &stmt.rhs.span);
-          (Type::ContractType(resolved_path), id)
+          (Type::ContractType(module_name), id)
         }
         _ => return Ok(false)
       };
@@ -445,14 +447,7 @@ pub fn parse_assignment(state: &mut Typing, stmt: &Assignment) -> Result<()> {
         let hint = parse_type(hint)?;
         match &hint {
           Type::ContractType(s) => {
-            let contract_id = state.find_name(&s).when(&expr.span)?;
-            let contract = state.get_info(contract_id).ty().clone();
-            trace!("hint: {} => {:?}", hint, contract);
-            match contract {
-              Type::ContractType(s) =>
-                state.get_info(id).should = Some(Type::Contract(s)),
-              _ => unreachable!("fixme: contract type not match"),
-            }
+            state.get_info(id).should = Some(Type::Contract(s.clone()))
           }
           _ => state.get_info(id).should = Some(hint),
         }
@@ -479,7 +474,7 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
         "receipt" => Type::Receipt,
         "bytes" => Type::Bytes,
         // "bytecode" => Type::Custom(StringPrefix::Bytecode),
-        _ if s.starts_with("@") => Type::Global(s[1..].to_string()),
+        _ if s.starts_with("@") => Type::Global(ModuleName::new(&s[1..])),
         _ if s.starts_with("int_") => {
           let suffix = &s["int_".len()..];
           let suffix = suffix.parse().map_err(|_| ErrorKind::TypeNameNotFound(suffix.to_string())).when(&hint.span)?;
@@ -490,8 +485,9 @@ pub fn parse_type(hint: &TypeLit) -> Result<Type> {
     },
     TypeKind::String(s, prefix) => {
       match prefix {
-        TypePrefix::None => Type::Contract(s.to_string()),
-        TypePrefix::Contract => Type::ContractType(s.to_string()),
+        TypePrefix::None => Type::Contract(ModuleName::new(s)),
+        TypePrefix::Contract => Type::ContractType(ModuleName::new(s)),
+        TypePrefix::Receipt => Type::ContractReceipt(ModuleName::new(s)),
         TypePrefix::Abi => {
           Type::Abi(ethabi::param_type::Reader::read(&s).when(&hint.span)?)
         },
@@ -629,25 +625,25 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
         this = Some(id);
         trace!("func module: {} {:?}", name, state.get_info(id));
         state.get_info(id).ty().clone()
-      } else if state.modules.contains(&name) {
-        Type::Global(name)
+      } else if let Some(module) = state.modules.get(&name) {
+        Type::Global(module.name.clone())
       } else {
         Type::NoneType
       }
     },
     _ => unreachable!(),
   };
-  let module_str = match module_ty {
-    Type::Global(name) => name.to_string(),
+  let module_name = match module_ty {
+    Type::Global(name) => name.clone(),
     Type::Contract(name) => name.clone(),
     _ => return Err(ErrorKind::ModuleNotContract(module_ty).when(&i.span)),
   };
 
   let name = i.name.to_string();
   let mut args = i.args.iter().map(|t| parse_expr(state, t)).collect::<Result<Vec<_>>>()?;
-  let (module_str, name) = if module_str == "@Global" && name == "deploy" {
+  let (module_name, name) = if module_name.0.as_str() == "@Global" && name == "deploy" {
     if args.is_empty() {
-      return Err(ErrorKind::DeployNoContract(module_str).when(&i.span.clone()))
+      return Err(ErrorKind::DeployNoContract(module_name).when(&i.span.clone()))
     }
     let this_arg = args.remove(0);
     this = match this_arg.code {
@@ -661,7 +657,7 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
     trace!("deploy: this = {:?} {}", this, module_str);
     (module_str, "constructor".to_string())
   } else {
-    (module_str, name)
+    (module_name, name)
   };
   let mut arg_ids = Vec::new();
   let mut arg_types = Vec::new();
@@ -669,9 +665,9 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
     arg_types.push(arg.returns.clone());
     arg_ids.push(state.insert_expr(arg));
   }
-  let func = match state.modules.get(&module_str).and_then(|i| i.select(&name, &arg_types)) {
+  let func = match state.modules.get(&module_name.0).and_then(|i| i.select(&name, &arg_types)) {
     Some(func) => func,
-    None => return Err(ErrorKind::FuncNotFound(module_str, name).when(&i.span))
+    None => return Err(ErrorKind::FuncNotFound(module_name, name).when(&i.span))
   };
   for (id, abi) in arg_ids.iter().zip(&func.input_types) {
     state.get_info(*id).should = Some(Type::Abi(abi.clone()));
