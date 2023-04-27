@@ -63,7 +63,7 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
     trace!("vm: {:?} = {:?}", id, value);
   }
   debug!("last_id: {:?}", state.last_id);
-  result?;
+
   for (name, id) in &state.scopes.latest {
     let Some(value) = vm.get_value(*id) else { continue };
     if let Some(i) = value.as_bytecode() {
@@ -71,6 +71,12 @@ fn run<P: AsRef<Path>>(workdir: P, opts: &Opts) -> Result<()> {
       continue;
     }
     info!("vm: {:?}({}) = <{}> {}", name, id, value.ty, value.v.repr_str());
+  }
+  match result {
+    Err(e) => {
+      error!("error: {}", e)
+    }
+    _ => {},
   }
   let cache = out::cache::from_vm(&vm, &state);
   std::fs::write(format!("{}/cache.json", opts.out), serde_json::to_string_pretty(&cache)?)?;

@@ -87,6 +87,7 @@ pub struct ValueInfo {
 pub struct BuiltIn {
   pub wallet: Option<LocalWallet>,
   pub confirm_interval: Option<f64>,
+  pub force_send: bool,
 }
 pub struct VM {
   pub generation: BTreeMap<CodeId, ValueId>,
@@ -130,6 +131,10 @@ impl VM {
         ValueKind::Number(number) => {
           self.state.confirm_interval = Some(number.to_f64().unwrap());
         }
+        _ => unreachable!()
+      }
+      "$force_send" => match &value.v {
+        ValueKind::Bool(b) => self.state.force_send = *b,
         _ => unreachable!()
       }
       _ => warn!("unknown builtin name {}", name)
@@ -316,6 +321,9 @@ fn execute_impl(vm: &mut VM, typing: &Typing, code: &ExprCode, ty: Option<&Type>
     ExprCode::String(string) => {
       Value::try_from(string.clone()).map_err(|e| anyhow::format_err!("TypedString: {}", e))?
     }
+    ExprCode::Const(value) => {
+      value.clone()
+    }
     ExprCode::List(list) => {
       let mut values = Vec::new();
       let mut sub_ty = None;
@@ -386,7 +394,13 @@ async fn do_send_tx_sync(vm: &VM, mut tx: TransactionRequest) -> Result<Transact
     tx = tx.from(wallet.address());
     // wallet.sign_transaction_sync(&tx)?;
   }
-  let pending = vm.provider.send_transaction(tx, None).await?;
+  let pending = match vm.provider.send_transaction(tx.clone(), None).await {
+    Ok(pending) => pending,
+    Err(_) if vm.state.force_send => {
+      vm.provider.send_transaction(tx.gas(200_000), None).await?
+    }
+    e => e?,
+  };
   let tx_hash = pending.tx_hash();
   trace!("pending: {:?}", pending);
   let pending = if let Some(i) = vm.state.confirm_interval {
@@ -420,6 +434,7 @@ fn convert_from_token(ty: Option<&Type>, mut args: Vec<Token>) -> Result<Value> 
 }
 
 fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<TransactionReceipt> {
+  info!("send_tx: {} {}.{}({})", this_addr, func.ns, func.name, args.iter().map(|i| i.show()).collect::<Vec<_>>().join(", "));
   let tokens = convert_to_token(&func.input_types, args)?;
   let mut input_data = Vec::new();
   input_data.extend_from_slice(&func.selector);

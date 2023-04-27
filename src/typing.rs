@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ast::{TypeLit, TypeKind, TypePrefix, StmtKind, Forloop, AssignOp};
+use crate::vm::Value;
 use crate::{
   ast::{Assignment, ExprKind, Span, StringPrefix, NumberSuffix, ExprLit, Funccall, TypedNumber, TypedString},
   abi::{Module, Func, globals, load_abi},
@@ -136,6 +137,7 @@ pub enum ExprCode {
   Convert(CodeId, Option<Type>),
   String(TypedString),
   Number(TypedNumber),
+  Const(Value),
   List(Vec<ExprCode>),
   Loop(CodeId, CodeId),
   EndLoop(CodeId),
@@ -536,9 +538,21 @@ pub fn parse_expr(state: &mut Typing, expr: &ExprLit) -> Result<Expression> {
   match &expr.inner {
     ExprKind::None => unreachable!(),
     ExprKind::Ident(i) => {
-      let dst = state.find_name(&i.to_string()).when(&i.span)?;
-      result.returns = state.get_info(dst).ty().clone();
-      result.code = ExprCode::Convert(dst, hint_ty);
+      match i.to_string().as_str() {
+        "true" => {
+          result.returns = Type::Bool;
+          result.code = ExprCode::Const(Value::from_bool(true))
+        }
+        "false" => {
+          result.returns = Type::Bool;
+          result.code = ExprCode::Const(Value::from_bool(false))
+        }
+        _ => {
+          let dst = state.find_name(&i.to_string()).when(&i.span)?;
+          result.returns = state.get_info(dst).ty().clone();
+          result.code = ExprCode::Convert(dst, hint_ty);
+        }
+      }
     },
     ExprKind::Funccall(i) => {
       let code = parse_func(state, i)?;
@@ -631,7 +645,12 @@ fn parse_func(state: &mut Typing, i: &Funccall) -> Result<ExprCode> {
         Type::NoneType
       }
     },
-    _ => unreachable!(),
+    _ => {
+      let expr = parse_expr(state, &i.module)?;
+      let ty = expr.returns.clone();
+      this = Some(state.insert_expr(expr));
+      ty
+    }
   };
   let module_name = match module_ty {
     Type::Global(name) => name.clone(),

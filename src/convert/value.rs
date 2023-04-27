@@ -20,7 +20,7 @@ impl Value {
       (Type::Receipt, ValueKind::Receipt(TransactionReceipt { contract_address: Some(_), ..}), Type::Contract(s))
         => Value { ty: Type::ContractReceipt(s.clone()), ..self },
       _ => {
-        warn!("unknown convert (as_ty) {} {}", self.ty, ty);
+        warn!("unknown convert (as_ty) {} {}: {}", self.ty, ty, self.show());
         return Err(self)
       }
     };

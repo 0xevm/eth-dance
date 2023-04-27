@@ -192,6 +192,7 @@ impl std::fmt::Display for ExprCode {
       ExprCode::Convert(arg0, None) => write!(f, "{}", arg0),
       ExprCode::String(arg0) => write!(f, "{}", arg0),
       ExprCode::Number(arg0) => write!(f, "{}", arg0),
+      ExprCode::Const(arg0) => write!(f, "{}", arg0),
       ExprCode::List(arg0) => {
         let s = arg0.iter().map(ToString::to_string).collect::<Vec<_>>();
         write!(f, "[{}]", s.join(","))
