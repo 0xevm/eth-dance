@@ -441,7 +441,12 @@ fn send_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value]) -> Result<T
   input_data.extend_from_slice(&ethabi::encode(&tokens));
   debug!("send_tx: {} {}", this_addr, hex::encode(&input_data));
   let tx = TransactionRequest::new().to(this_addr).data(input_data);//.from(vm.builtin.account);
-  Ok(do_send_tx_sync(vm, tx)?)
+  let result = do_send_tx_sync(vm, tx)?;
+  if result.status.map(|i| i.as_u64()) != Some(1) {
+    error!("reverted: {:?}", result);
+    return Err(anyhow::anyhow!("reverted: {:?}", result))
+  }
+  Ok(result)
 }
 
 fn call_tx(vm: &VM, this_addr: Address, func: Func, args: &[&Value], ty: Option<&Type>) -> Result<Value> {

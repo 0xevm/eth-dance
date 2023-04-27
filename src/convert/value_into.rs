@@ -77,13 +77,13 @@ impl TryInto<Number> for &Value {
             base *= BigDecimal::from(BigInt::from_usize(1).unwrap() << s);
           }
           // NumberSuffix::F(b, s) => {}
-          NumberSuffix::E(_, s) => {
+          NumberSuffix::D(_, s) => {
             base *= BigDecimal::from(BigInt::from_usize(10).unwrap().pow(s as u32));
           },
           _ => {}
         }
         let value = match suffix {
-          NumberSuffix::Q(true, _) | NumberSuffix::E(true, _) => {
+          NumberSuffix::Q(true, _) | NumberSuffix::D(true, _) => {
             if base < BigDecimal::from_isize(0).unwrap() {
               return Err(ErrorKind::Number("value < 0")).context("try_into_number")
             }
@@ -93,7 +93,7 @@ impl TryInto<Number> for &Value {
             trace!("try_from(Value<=TypedNumber): base(u) = {}", base.to_string());
             Number::U(U256::from_dec_str(&base.round(0).to_string()).unwrap())
           },
-          NumberSuffix::Q(false, _) | NumberSuffix::E(false, _) => {
+          NumberSuffix::Q(false, _) | NumberSuffix::D(false, _) => {
             let bound = BigDecimal::from(BigInt::from_usize(2).unwrap().pow(255));
             if base >= bound {
               return Err(ErrorKind::Number("value >= 2**255")).context("try_into_number")

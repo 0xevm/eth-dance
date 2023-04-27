@@ -14,11 +14,14 @@ impl Value {
       (Type::Number(_), ValueKind::Number(_), Type::Number(_)) |
       (Type::Bytes, ValueKind::Bytecode(_), Type::ContractType(_)) |
       (Type::Address, ValueKind::Address(_), Type::Contract(_)) |
-      (Type::Contract(_), ValueKind::Address(_), Type::Abi(ParamType::Address))
+      (Type::Contract(_), ValueKind::Address(_), Type::Abi(ParamType::Address)) |
+      (Type::Contract(_), ValueKind::Address(_), Type::Address)
         => Value { ty: ty.clone(), ..self },
 
       (Type::Receipt, ValueKind::Receipt(TransactionReceipt { contract_address: Some(_), ..}), Type::Contract(s))
         => Value { ty: Type::ContractReceipt(s.clone()), ..self },
+      (_, ValueKind::Receipt(TransactionReceipt { contract_address: Some(_), ..}), Type::Address)
+        => Value { ty: ty.clone(), ..self },
       _ => {
         warn!("unknown convert (as_ty) {} {}: {}", self.ty, ty, self.show());
         return Err(self)

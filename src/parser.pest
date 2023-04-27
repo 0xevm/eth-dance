@@ -20,12 +20,13 @@ ident = @{ "$"? ~ ident_inner | "@" ~ ident_inner? }
 int = @{ ASCII_DIGIT+ }
 float = @{ int ~ "." ~ int }
 number_suffix = @{
-  "e" ~ int ~ "u"? |
+  "d" ~ int |
   "f" ~ int? |
   "u"? ~ "q" ~ int? |
   "eth" | "gwei"
 }
-number = ${ (float | int) ~ number_suffix? }
+number_base = ${ "-"? ~ (float | int) ~ ("e" ~ int)? }
+number = ${ number_base ~ number_suffix? }
 fixed_array = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]"}
 index_access = { ident ~ "[" ~ (expr ~ ("," ~ expr)*) ~ "]" }
 

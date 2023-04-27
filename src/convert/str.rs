@@ -56,9 +56,9 @@ impl Display for NumberSuffix {
       NumberSuffix::Q(_, i) => write!(f, "{}q{}", u, i),
       NumberSuffix::F(i) => write!(f, "f{}{}", i, u),
 
-      NumberSuffix::E(true, 18) => write!(f, "eth"),
-      NumberSuffix::E(true, 9) => write!(f, "gwei"),
-      NumberSuffix::E(_, i) => write!(f, "e{}{}", i, u),
+      NumberSuffix::D(true, 18) => write!(f, "eth"),
+      NumberSuffix::D(true, 9) => write!(f, "gwei"),
+      NumberSuffix::D(_, i) => write!(f, "d{}{}", i, u),
     }
   }
 }

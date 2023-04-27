@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use bigdecimal::{BigDecimal, FromPrimitive};
+use bigdecimal::{BigDecimal, FromPrimitive, num_bigint::BigInt};
 use ethabi::Address;
 use ethers::{signers::LocalWallet, types::TransactionReceipt};
 

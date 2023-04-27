@@ -136,6 +136,22 @@ pub fn into_inner_pair<T: pest::RuleType>(pair: Pair<T>) -> Result<Pair<T>, Erro
   check_empty(pairs)?;
   Ok(pair)
 }
+pub fn check_maybe_next<'a>(pairs: &mut Pairs<'a, Rule>, rule: Rule) -> Option<Pair<'a, Rule>> {
+  let pair = pairs.peek()?;
+  if pair.as_rule() != rule {
+    return None;
+  }
+  pairs.next()
+}
+pub fn check_next<'a>(pairs: &mut Pairs<'a, Rule>, rule: Rule) -> Result<Pair<'a, Rule>, ErrorKind> {
+  let Some(pair) = pairs.next() else {
+    return Err(ErrorKind::PairCount(0))
+  };
+  if pair.as_rule() != rule {
+    return Err(ErrorKind::Mismatch { require: rule, found: pair.as_rule() })
+  }
+  Ok(pair)
+}
 pub fn check_empty<T: pest::RuleType>(pairs: Pairs<T>) -> Result<(), ErrorKind> {
   if pairs.peek().is_some() {
     return Err(ErrorKind::PairCount(pairs.count() + 1))
@@ -218,7 +234,7 @@ pub struct ExprList {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NumberSuffix {
-  #[default] None, Signed, Q(bool, usize), F(usize), E(bool, usize),
+  #[default] None, Signed, Q(bool, usize), F(usize), D(bool, usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -235,7 +251,7 @@ impl NumberSuffix {
     match self {
       NumberSuffix::None => true,
       NumberSuffix::Signed | NumberSuffix::F(_) => false,
-      NumberSuffix::E(b, _) | NumberSuffix::Q(b, _)
+      NumberSuffix::D(b, _) | NumberSuffix::Q(b, _)
         => b
     }
   }
@@ -675,27 +691,19 @@ fn parse_string_typed(pair: Pair<Rule>) -> Result<TypedString> {
   Ok(TypedString { prefix, value: i.value, span: i.span })
 }
 
-// number = { (float | int) ~ number_suffix? }
+// number = ${ (float | int) ~ ("e" ~ int)? ~ number_suffix? }
 fn parse_number(pair: Pair<Rule>) -> Result<TypedNumber> {
   assert_eq!(pair.as_rule(), Rule::number);
   let span = pair.as_span().into();
   let mut pairs = pair.into_inner();
   let mut result = TypedNumber::default();
 
-  let pair = pairs.next().expect("pairs: number => int");
-  match pair.as_rule() {
-    Rule::float | Rule::int => result.value = pair.as_str().to_string(),
-    rule => return Err(ErrorKind::Mismatch { require: Rule::float, found: rule }.when(&span, Rule::number))
-  }
+  let pair = check_next(&mut pairs, Rule::number_base).when(&span, Rule::number)?;
+  result.value = pair.as_str().to_string();
 
-  result.suffix = if let Some(pair) = pairs.next() {
-    assert_eq!(pair.as_rule(), Rule::number_suffix);
-    match pair.as_rule() {
-      Rule::number_suffix => parse_number_suffix(pair.as_str(), pair.as_span().into())?,
-      rule => return Err(ErrorKind::Mismatch { require: Rule::number_suffix, found: rule }.when(&span, Rule::number))
-    }
-  } else {
-    NumberSuffix::None
+  result.suffix = match check_maybe_next(&mut pairs, Rule::number_suffix) {
+    Some(pair) => parse_number_suffix(pair.as_str(), pair.as_span().into())?,
+    _ => NumberSuffix::None,
   };
   Ok(result)
 }
@@ -704,8 +712,8 @@ pub(crate) fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix>
   match str {
     "" => return Ok(NumberSuffix::None),
     "i" => return Ok(NumberSuffix::Signed),
-    "eth" => return Ok(NumberSuffix::E(true, 18)),
-    "gwei" => return Ok(NumberSuffix::E(true, 9)),
+    "eth" => return Ok(NumberSuffix::D(true, 18)),
+    "gwei" => return Ok(NumberSuffix::D(true, 9)),
     _ => {}
   }
   let is_u = str.starts_with("u") || str.ends_with("u");
@@ -724,7 +732,7 @@ pub(crate) fn parse_number_suffix(str: &str, span: Span) -> Result<NumberSuffix>
       NumberSuffix::F(n.unwrap_or(64))
     },
     Some('q') => NumberSuffix::Q(is_u, n.unwrap_or(64)),
-    Some('e') => NumberSuffix::E(is_u, n.unwrap_or(0)),
+    Some('d') => NumberSuffix::D(is_u, n.unwrap_or(18)),
     _ => return Err(ErrorKind::Value { require: Rule::number_suffix, value: str.to_string() }.when(&span, Rule::number_suffix)),
   };
   Ok(result)
